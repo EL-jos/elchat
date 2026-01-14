@@ -12,20 +12,34 @@ class EmbeddingService
      */
     public function getEmbedding(string $text): array
     {
-        // Exemple MVP: placeholder vecteur 1536 dimensions
-        // Remplacer par appel API OpenRouter/OpenAI en prod
-        /*$embedding = array_fill(0, 1536, 0.01); // valeur dummy pour test
-        return $embedding;*/
+        $attempts = 0;
+        $maxAttempts = 5;
 
+        do {
+            $attempts++;
 
-        // Exemple OpenRouter API
-        $response = Http::withHeaders([
-            'Authorization' => 'Bearer ' . env('OPENROUTER_API_KEY')
-        ])->post('https://openrouter.ai/api/v1/embeddings', [
-            'model' => 'text-embedding-3-small',
-            'input' => $text
-        ]);
-        return $response->json()['data'][0]['embedding'];
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . env('OPENROUTER_API_KEY')
+            ])->post('https://openrouter.ai/api/v1/embeddings', [
+                'model' => 'text-embedding-3-small',
+                'input' => $text
+            ]);
 
+            $json = $response->json();
+
+            if (isset($json['data'][0]['embedding'])) {
+                return $json['data'][0]['embedding'];
+            }
+
+            // petite pause pour éviter le spam API
+            usleep(500_000); // 500ms
+
+        } while ($attempts < $maxAttempts);
+
+        throw new \RuntimeException(
+            'Embedding failed after retries: ' . json_encode($json ?? null)
+        );
     }
+
+
 }

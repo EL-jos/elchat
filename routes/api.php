@@ -1,11 +1,9 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\api\v1\SiteController;
 use App\Http\Controllers\api\v1\AuthController;
-use App\Http\Controllers\api\v1\JobOfferController as ApiJobOfferController;
-use App\Http\Controllers\api\v1\TestController as ApiTestController;
-use App\Http\Controllers\api\v1\TestAttemptController;
-use App\Http\Controllers\api\v1\TechnologyController as ApiTechnologyController;
+use Illuminate\Support\Facades\Log;
 
 Route::prefix('v1')->group(function () {
 
@@ -23,7 +21,18 @@ Route::prefix('v1')->group(function () {
 
 
     Route::middleware('jwt.auth')->group(function () {
+        Route::apiResource('site', SiteController::class);
+        Route::controller(SiteController::class)->group(function () {
+            Route::post('site/{id}/crawl', 'crawl');
+        });
 
     });
 
+
+    Route::get('/test-log', function () {
+        Log::debug('✅ Test de log DEBUG');
+        Log::info('✅ Test de log INFO');
+        return 'Logs envoyés ! Vérifie storage/logs/laravel.log';
+    });
 });
+

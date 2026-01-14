@@ -16,7 +16,7 @@ return new class extends Migration
             $table->uuid('account_id');
             $table->string('url');
             $table->enum('status', ['pending', 'crawling', 'ready', 'error'])->default('pending');
-            $table->integer('crawl_depth')->default(1);
+            $table->integer('crawl_depth')->default(2);
             $table->timestamps();
 
             $table->foreign('account_id')->references('id')->on('accounts')->onDelete('cascade');
