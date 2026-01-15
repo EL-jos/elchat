@@ -53,15 +53,17 @@ class ChatService
         return $answer;
     }
 
+    /**
+     * Répond à une question avec un style commercial et fluide
+     */
     public function answer(Site $site, string $question): string
     {
-        // 1. Embedding de la question
+        // 1️⃣ Embedding de la question
         $questionEmbedding = $this->embeddingService->getEmbedding($question);
 
-        // 2. Charger les chunks du site
-        $chunks = Chunk::whereHas('page', fn($q) =>
-        $q->where('site_id', $site->id)
-        )->get();
+        // 2️⃣ Récupérer les chunks du site
+        $chunks = Chunk::whereHas('page', fn($q) => $q->where('site_id', $site->id))
+            ->get();
 
         $scored = [];
 
@@ -71,7 +73,7 @@ class ChatService
                 $chunk->embedding
             );
 
-            if ($score >= 0.55) {
+            if ($score >= 0.3) { // seuil plus bas pour attraper plus d'infos
                 $scored[] = [
                     'text' => $chunk->text,
                     'score' => $score,
@@ -79,70 +81,52 @@ class ChatService
             }
         }
 
+        // 🔹 Log debug
         Log::info('RAG DEBUG', [
             'question' => $question,
             'chunks_count' => $chunks->count(),
-            'scores' => collect($chunks)->map(fn($c) =>
-            $this->similarityService->cosine(
-                $questionEmbedding,
-                $c->embedding
-            )
+            'top_scores' => collect($chunks)->map(fn($c) =>
+            $this->similarityService->cosine($questionEmbedding, $c->embedding)
             )->sortDesc()->take(5)->values()
         ]);
 
-
-        // 3. Aucun contexte → question sans réponse
+        // 3️⃣ Si aucun chunk pertinent → fallback
         if (empty($scored)) {
             UnansweredQuestion::create([
                 'site_id' => $site->id,
                 'question' => $question,
             ]);
 
-            return "Je ne trouve pas cette information sur ce site.";
+            // On met un contexte générique pour que l'IA crée une réponse persuasive
+            $context = "Aucune information exacte n'est disponible sur le site pour cette question.";
+        } else {
+            // 4️⃣ Trier par score et limiter top 3
+            usort($scored, fn($a, $b) => $b['score'] <=> $a['score']);
+            $context = collect(array_slice($scored, 0, 3))
+                ->pluck('text')
+                ->implode("\n\n---\n\n");
         }
 
-        // 4. Trier par score et limiter
-        usort($scored, fn($a, $b) => $b['score'] <=> $a['score']);
-        $context = collect(array_slice($scored, 0, 3))
-            ->pluck('text')
-            ->implode("\n\n---\n\n");
-
-        //dump($context);
-
-        // 5. Appel LLM
+        // 5️⃣ Appel LLM commercial
         return $this->callLLM($question, $context);
     }
 
     /**
-     * Cosine similarity
-     */
-    private function cosineSimilarity(array $vecA, array $vecB): float
-    {
-        $dot = 0; $normA = 0; $normB = 0;
-        foreach ($vecA as $i => $val) {
-            $dot += $val * ($vecB[$i] ?? 0);
-            $normA += $val ** 2;
-            $normB += ($vecB[$i] ?? 0) ** 2;
-        }
-        return $normA && $normB ? $dot / (sqrt($normA) * sqrt($normB)) : 0;
-    }
-
-    /**
      * Appel LLM (OpenRouter/OpenAI)
+     * Appel LLM pour réponse commerciale fluide
      */
     private function callLLM(string $question, string $context): string
     {
         $response = Http::withHeaders([
             'Authorization' => 'Bearer ' . env('OPENROUTER_API_KEY'),
         ])->post('https://openrouter.ai/api/v1/chat/completions', [
-            'model' => 'meta-llama/llama-3.1-8b-instruct',
+            'model' => 'meta-llama/llama-3.1-8b-instruct', // ou gpt-3.5-turbo si préféré
             'messages' => [
                 [
                     'role' => 'system',
                     'content' =>
-                        "Tu réponds uniquement avec le CONTEXTE fourni. "
-                        . "Si l'information n'existe pas, dis : "
-                        . "'Je ne trouve pas cette information sur ce site.'"
+                        "Tu es un commercial expert. Utilise le CONTEXTE fourni pour répondre à la question. "
+                        . "Même si le CONTEXTE n'a pas l'information exacte, crée une réponse fluide, persuasive et commerciale."
                 ],
                 [
                     'role' => 'user',
@@ -150,11 +134,10 @@ class ChatService
                         "CONTEXTE:\n{$context}\n\nQUESTION:\n{$question}"
                 ]
             ],
-            'temperature' => 0,
-            'max_tokens' => 300,
+            'temperature' => 0.7, // plus créatif et commercial
+            'max_tokens' => 400,
         ]);
 
-        //dd($response->json());
         return $response->json()['choices'][0]['message']['content']
             ?? "Je ne trouve pas cette information sur ce site.";
     }

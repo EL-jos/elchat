@@ -4,16 +4,14 @@ namespace App\Services;
 
 class SimilarityService
 {
-    public function cosine(array $a, array $b): float
+    public function cosine(array $vecA, array $vecB): float
     {
-        $dot = $normA = $normB = 0.0;
-
-        foreach ($a as $i => $value) {
-            $dot += $value * ($b[$i] ?? 0);
-            $normA += $value ** 2;
-            $normB += ($b[$i] ?? 0) ** 2;
+        $dot = 0; $normA = 0; $normB = 0;
+        foreach ($vecA as $i => $val) {
+            $dot += $val * ($vecB[$i] ?? 0);
+            $normA += $val ** 2;
+            $normB += ($vecB[$i] ?? 0) ** 2;
         }
-
-        return $dot / (sqrt($normA) * sqrt($normB));
+        return $normA && $normB ? $dot / (sqrt($normA) * sqrt($normB)) : 0;
     }
 }
