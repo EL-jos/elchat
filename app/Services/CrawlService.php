@@ -10,7 +10,7 @@ use Illuminate\Support\Str;
 use Symfony\Component\HttpClient\HttpClient;
 use Symfony\Component\BrowserKit\HttpBrowser;
 use Symfony\Component\DomCrawler\Crawler;
-use Log; // Nécessaire pour les logs
+use Illuminate\Support\Facades\Log;
 
 class CrawlService
 {

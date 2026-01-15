@@ -18,7 +18,8 @@ class IndexService
      */
     public function chunkAndIndex(Page $page)
     {
-        $chunks = $this->chunkText($page->content, 500); // 500 mots par chunk
+        $chunks = $this->chunkText($page->content, 800); // 500 mots par chunk
+        $chunks = array_unique($chunks);
 
         foreach ($chunks as $textChunk) {
             $embedding = $this->embeddingService->getEmbedding($textChunk);
@@ -37,6 +38,7 @@ class IndexService
     {
         $words = preg_split('/\s+/', $text);
         $chunks = array_chunk($words, $chunkSize);
+        $chunks = array_unique($chunks);
         return array_map(fn($c) => implode(' ', $c), $chunks);
     }
 }

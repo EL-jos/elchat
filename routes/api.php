@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\api\v1\ChatController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\api\v1\SiteController;
 use App\Http\Controllers\api\v1\AuthController;
@@ -25,7 +26,7 @@ Route::prefix('v1')->group(function () {
         Route::controller(SiteController::class)->group(function () {
             Route::post('site/{id}/crawl', 'crawl');
         });
-
+        Route::post('/chat/ask', [ChatController::class, 'ask']);
     });
 
 
