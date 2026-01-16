@@ -3,6 +3,7 @@
 
 namespace App\Jobs;
 
+use App\Models\CrawlJob;
 use App\Models\Site;
 use App\Services\CrawlService; // Importer le service de crawling
 use App\Services\IndexService; // Importer le service d'indexation
@@ -18,9 +19,8 @@ class CrawlSiteJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $timeout = 0; // PAS de limite spécifique ici, gérée par la queue et le worker
+    public $timeout = 0;
     public $tries = 1;
-
     protected string $siteId;
 
     public function __construct(string $siteId)
@@ -28,33 +28,50 @@ class CrawlSiteJob implements ShouldQueue
         $this->siteId = $siteId;
     }
 
-    public function handle(
-        CrawlService $crawlService,    // Injection du service de crawling
-        IndexService $indexService    // Injection du service d'indexation
-    ): void {
+    public function handle(CrawlService $crawlService)
+    {
         $site = Site::findOrFail($this->siteId);
 
-        // Appeler la méthode du service pour effectuer le crawling
-        $crawlService->crawlSite($site);
+        // 1️⃣ Préparer toutes les URLs à crawler
+        $allUrls = $crawlService->prepareQueue($site);
 
-        // Une fois le crawling terminé, lancer l'indexation
-        foreach ($site->pages as $page) {
-            $indexService->chunkAndIndex($page);
+        if (empty($allUrls)) {
+            $site->update(['status' => 'ready']);
+            return;
         }
+
+        // 2️⃣ Créer un crawl_job pour chaque URL
+        foreach ($allUrls as $item) {
+            CrawlJob::create([
+                'site_id' => $site->id,
+                'page_url' => $item['url'],
+                'status' => 'pending',
+            ]);
+        }
+
+        // 3️⃣ Dispatcher les batches de pages
+        $batchSize = 5;
+        $crawlJobs = CrawlJob::where('site_id', $site->id)
+            ->where('status', 'pending')
+            ->get();
+
+        foreach ($crawlJobs->chunk($batchSize) as $chunk) {
+            $urlsBatch = $chunk->pluck('page_url')->toArray();
+            CrawlPageBatchJob::dispatch($site->id, $urlsBatch);
+        }
+
+        $site->update(['status' => 'crawling']);
     }
 
-    public function failed(Throwable $e): void
+    public function failed(Throwable $e)
     {
         $site = Site::find($this->siteId);
-
         if ($site) {
             $site->update(['status' => 'error']);
-            Log::error("Job CrawlSiteJob échoué pour le site ID {$this->siteId}", [
+            Log::error("CrawlSiteJob échoué pour site {$this->siteId}", [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
-        } else {
-            Log::warning("Job CrawlSiteJob échoué : Site ID {$this->siteId} introuvable.");
         }
     }
 }

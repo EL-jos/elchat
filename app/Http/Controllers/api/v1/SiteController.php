@@ -5,6 +5,7 @@ namespace App\Http\Controllers\api\v1;
 use App\Http\Controllers\Controller;
 use App\Jobs\CrawlSiteJob;
 use App\Models\CrawlJob;
+use App\Models\Document;
 use App\Models\Page;
 use App\Models\Site;
 use App\Services\CrawlService;
@@ -46,14 +47,25 @@ class SiteController extends Controller
     {
         $validated = $request->validate([
             'url' => 'required|url',
-            'crawl_depth' => 'nullable|integer|min:1|max:5'
+            'type_site_id' => 'required|exists:type_sites,id',
+            'company_name' => 'nullable|string|max:255',
+            'crawl_depth' => 'nullable|integer|min:1|max:5',
+            'exclude_pages' => 'nullable|array',
+            'exclude_pages.*' => 'string',
+            'include_pages' => 'nullable|array',
+            'include_pages.*' => 'string',
         ]);
 
         $site = Site::create([
             'account_id' => auth()->user()->account_id,
+            'type_site_id' => $validated['type_site_id'],
+            'company_name' => $validated['company_name'] ?? null,
             'url' => $validated['url'],
             'status' => 'pending',
-            'crawl_depth' => $validated['crawl_depth'] ?? 1
+            'crawl_depth' => $validated['crawl_depth'] ?? 1,
+            'crawl_delay' => $validated['crawl_delay'] ?? 0,
+            'exclude_pages' => $validated['exclude_pages'] ?? [],
+            'include_pages' => $validated['include_pages'] ?? null,
         ]);
 
         return response()->json($site, 201);
@@ -111,241 +123,37 @@ class SiteController extends Controller
             ->where('account_id', auth()->user()->account_id)
             ->firstOrFail();
 
-
         // Dispatch le Job en arrière-plan
         CrawlSiteJob::dispatch($site->id);
 
-        return response()->json(['message'=>'Crawl and indexing completed', 'site' => $site]);
+        // Mettre directement le status à "crawling" pour l'utilisateur
+        $site->update(['status' => 'crawling']);
+
+        return response()->json([
+            'message' => 'Crawl started in background',
+            'site' => $site
+        ]);
     }
-    public function crawlSite(Request $request, $id)
+    public function uploadDocument(Request $request, Site $site)
     {
-        $site = Site::where('id', $id)
-            ->where('account_id', auth()->user()->account_id)
-            ->firstOrFail();
+        $this->authorize('update', $site);
 
-        // Instanciez le service d'indexation
-        $indexService = app(IndexService::class);
+        $validated = $request->validate([
+            'file' => 'required|file|max:20480',
+            'type' => 'required|in:image,file,other',
+            'priority' => 'required|integer|min:1|max:10'
+        ]);
 
-        try {
-            $site->update(['status' => 'crawling']);
+        $path = $request->file('file')->store('documents');
 
-            // --- NOUVELLE LOGIQUE DE CRAWLING ICI ---
-            $visited = [];
-            $seenInQueue = [];
-            $baseUrl = rtrim($site->url, '/') . '/';
-            $baseHost = parse_url($baseUrl, PHP_URL_HOST); // Extraire le host pour comparaison
+        $document = Document::create([
+            'type' => $validated['type'],
+            'path' => $path,
+            'priority' => $validated['priority']
+        ]);
 
-            $queue = [$baseUrl];
+        $site->documents()->attach($document->id);
 
-            while (!empty($queue)) {
-                $url = array_shift($queue);
-
-                if (in_array($url, $visited, true)) {
-                    continue;
-                }
-
-                $visited[] = $url;
-
-                // Créer le crawlJob pour cette page
-                $crawlJob = CrawlJob::create([
-                    'id' => (string) Str::uuid(),
-                    'site_id' => $site->id,
-                    'page_url' => $url,
-                    'status' => 'processing',
-                ]);
-
-                try {
-                    // Initialiser le client HttpBrowser
-                    $client = new HttpBrowser(HttpClient::create([
-                        'timeout' => 60,
-                    ]));
-
-                    // Faire la requête GET
-                    $response = $client->request('GET', $url);
-
-                    // Obtenir le Crawler
-                    $crawler = $client->getCrawler();
-
-                    // Extraction du contenu textuel
-                    $text = $crawler->filter('body')->text('', true); // Récupérer le texte du body
-                    $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-                    $text = preg_replace('/\s+/', ' ', trim($text));
-
-                    // Extraction du titre
-                    $title = '';
-                    $titleElement = $crawler->filter('title')->first();
-                    if ($titleElement->count() > 0) {
-                        $title = trim(html_entity_decode($titleElement->text(), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-                    }
-
-                    // Extraction des liens
-                    $links = [];
-                    $crawler->filter('a[href]')->each(function (Crawler $node) use (&$links, $url, $baseHost) {
-                        $href = trim($node->attr('href'));
-
-                        if (
-                            !$href ||
-                            str_starts_with($href, '#') ||
-                            preg_match('/^(mailto|tel|javascript|ftp|data):/i', $href)
-                        ) {
-                            return; // Ignorer ces types de liens
-                        }
-
-                        // Résoudre l'URL relative à l'URL absolue de la page courante
-                        $absoluteUrl = \Symfony\Component\Routing\Generator\UrlGeneratorInterface::ABSOLUTE_URL;
-                        $resolvedUrl = new \Symfony\Component\Routing\RequestContext();
-                        $resolver = new \Symfony\Component\Routing\Matcher\UrlMatcher(new \Symfony\Component\Routing\RouteCollection(), $resolvedUrl);
-                        // Ce n'est pas la bonne façon avec HttpBrowser. Utilisons plutôt une fonction utilitaire.
-                        $absoluteLink = $this->resolveUrl($href, $url);
-
-                        if ($absoluteLink) {
-                            $linkHost = parse_url($absoluteLink, PHP_URL_HOST);
-                            if ($linkHost === $baseHost) {
-                                $cleanLink = rtrim($absoluteLink, '/');
-                                if (!in_array($cleanLink, $links, true)) {
-                                    $links[] = $cleanLink;
-                                }
-                            }
-                        }
-                    });
-
-                    Log::debug("Page crawlée avec HttpBrowser: {$url}", [
-                        'title' => $title,
-                        'links_count' => count($links),
-                    ]);
-
-                    // Créer l'enregistrement Page
-                    Page::create([
-                        'id' => (string) Str::uuid(),
-                        'site_id' => $site->id,
-                        'crawl_job_id' => $crawlJob->id,
-                        'url' => $url,
-                        'title' => $title,
-                        'content' => $text,
-                    ]);
-
-                    $crawlJob->update(['status' => 'done']);
-
-                    // Ajouter les nouveaux liens à la file d'attente
-                    foreach ($links as $link) {
-                        if (!in_array($link, $visited, true) && !in_array($link, $seenInQueue, true)) {
-                            $seenInQueue[] = $link;
-                            $queue[] = $link;
-                        }
-                    }
-
-                } catch (Throwable $e) {
-                    Log::error("Erreur lors du crawl de {$url}", [
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString(),
-                    ]);
-
-                    $crawlJob->update([
-                        'status' => 'error',
-                        'error_message' => $e->getMessage(),
-                    ]);
-                }
-            }
-
-            // --- FIN DE LA NOUVELLE LOGIQUE DE CRAWLING ---
-
-            // Lancer l'indexation SYNCHRONEMENT
-            foreach ($site->pages as $page) {
-                $indexService->chunkAndIndex($page);
-            }
-
-            $site->update(['status' => 'ready']);
-
-            return response()->json(['message' => 'Crawl and indexing completed', 'site' => $site]);
-
-        } catch (Throwable $e) {
-            $site->update(['status' => 'error']);
-            Log::error("Erreur globale lors du crawl synchrone du site ID {$site->id}", [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'message' => 'Crawl and indexing failed',
-                'error' => $e->getMessage(),
-                'site' => $site
-            ], 500);
-        }
-    }
-
-    /**
-     * Résout une URL relative à partir d'une URL de base.
-     * Remplace la logique de UriHttp::resolve.
-     *
-     * @param string $relativeUrl
-     * @param string $baseUrl
-     * @return string|null
-     */
-    private function resolveUrl(string $relativeUrl, string $baseUrl): ?string
-    {
-        // Si l'URL est déjà absolue
-        if (parse_url($relativeUrl, PHP_URL_SCHEME)) {
-            return $relativeUrl;
-        }
-
-        // Si c'est un chemin absolu (/path)
-        if (str_starts_with($relativeUrl, '/')) {
-            $baseComponents = parse_url($baseUrl);
-            if ($baseComponents === false) {
-                return null; // URL de base invalide
-            }
-            $scheme = $baseComponents['scheme'] ?? 'http';
-            $host = $baseComponents['host'] ?? '';
-            $port = isset($baseComponents['port']) ? ':' . $baseComponents['port'] : '';
-            return $scheme . '://' . $host . $port . $relativeUrl;
-        }
-
-        // Sinon, c'est un chemin relatif (./path, ../path, path)
-        // Simplifié : on suppose que baseUrl se termine par / ou contient un fichier
-        $basePath = dirname(parse_url($baseUrl, PHP_URL_PATH) ?: '/');
-        if ($basePath === '.') {
-            $basePath = '/';
-        }
-        $newPath = $basePath . '/' . $relativeUrl;
-        // Nettoyer les /./ et /../
-        $newPath = $this->normalizePath($newPath);
-
-        $baseComponents = parse_url($baseUrl);
-        if ($baseComponents === false) {
-            return null; // URL de base invalide
-        }
-        $scheme = $baseComponents['scheme'] ?? 'http';
-        $host = $baseComponents['host'] ?? '';
-        $port = isset($baseComponents['port']) ? ':' . $baseComponents['port'] : '';
-        return $scheme . '://' . $host . $port . $newPath;
-    }
-
-    /**
-     * Normalise un chemin en résolvant ./ et ../
-     */
-    private function normalizePath(string $path): string
-    {
-        $parts = explode('/', $path);
-        $normalized = [];
-
-        foreach ($parts as $part) {
-            if ($part === '.' || $part === '') {
-                continue;
-            }
-            if ($part === '..') {
-                array_pop($normalized); // Remonte d'un niveau
-            } else {
-                $normalized[] = $part;
-            }
-        }
-
-        $result = implode('/', $normalized);
-        if (str_starts_with($path, '/')) {
-            $result = '/' . $result;
-        }
-        if (substr($path, -1) === '/' && substr($result, -1) !== '/') {
-            $result .= '/';
-        }
-        return $result;
+        return response()->json($document, 201);
     }
 }

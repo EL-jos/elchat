@@ -14,211 +14,92 @@ use Illuminate\Support\Facades\Log;
 
 class CrawlService
 {
-    /**
-     * Lance le crawl d’un site selon sa profondeur et respecte le crawl-delay.
-     * Cette méthode encapsule toute la logique de crawling.
-     *
-     * @param Site $site
-     * @return void
-     */
-    public function crawlSite(Site $site): void
+    public function prepareQueue(Site $site): array
     {
-        Log::alert("🚀 Démarrage du crawl pour le site ID {$site->id} - URL: {$site->url}");
+        $queue = [];
+        $visited = [];
 
-        // Initialisation des structures de données pour éviter les boucles/doublons de liens
-        $visited = [];          // URLs déjà traitées (crawlées et Page potentiellement créée)
-        $seenInQueue = [];      // URLs déjà présentes dans la file d'attente (évite les doublons dans la queue)
-        $contentCache = [];     // Structure temporaire pour éviter les doublons de contenu (titre + contenu)
+        $baseUrl = rtrim($site->url, '/') . '/';
+        $baseHost = parse_url($baseUrl, PHP_URL_HOST);
 
-        $baseUrl = rtrim($site->url, '/') . '/'; // Assurez-vous que l'URL de base se termine par /
-        $baseHost = parse_url($baseUrl, PHP_URL_HOST); // Extraire le host pour filtrer les liens internes
+        Log::info("PrepareQueue start: baseUrl={$baseUrl}");
 
-        // Initialisation de la file d'attente avec l'URL de base et une profondeur de 0
-        $queue = [
-            [
-                'url' => $baseUrl,
-                'depth' => 0,
-            ]
-        ];
+        // Si include_pages fourni → crawl ciblé
+        if (!empty($site->include_pages)) {
+            foreach ($site->include_pages as $path) {
+                $resolved = $this->resolveUrl($path, $baseUrl);
+                Log::info("Include page resolved: {$resolved}");
+                $queue[] = ['url' => $resolved, 'depth' => 0];
+            }
+        } else {
+            $queue[] = ['url' => $baseUrl, 'depth' => 0];
+        }
 
-        $site->update(['status' => 'crawling']);
-        Log::info("Démarrage du crawl pour le site {$site->url} (profondeur: {$site->crawl_depth})");
+        $allUrls = [];
 
-        // Boucle principale de crawl
         while (!empty($queue)) {
-            // Extraire le prochain élément de la file (FIFO - First In, First Out)
             $current = array_shift($queue);
             $url = $current['url'];
             $depth = $current['depth'];
 
-            // --- VÉRIFICATION DE LA PROFONDEUR ---
-            // Si la profondeur actuelle dépasse la limite autorisée pour ce site, ignorer cette URL
-            if ($depth > $site->crawl_depth) {
-                Log::debug("Profondeur max atteinte, URL ignorée: {$url}", ['max_depth' => $site->crawl_depth, 'current_depth' => $depth]);
-                continue;
-            }
-            // --- FIN DE LA VÉRIFICATION ---
+            Log::info("Queue processing: url={$url}, depth={$depth}");
 
-            // Normaliser l'URL avant de la traiter (et avant de vérifier visited/seenInQueue)
+            if ($depth > $site->crawl_depth) continue;
+
             $normalizedUrl = $this->normalizeUrl($url);
 
-            // Vérifier si l'URL normalisée a déjà été visitée pour éviter de la traiter à nouveau
-            if (in_array($normalizedUrl, $visited, true)) {
-                Log::debug("URL déjà visitée (normalisée), ignorée: {$url} (depuis: {$normalizedUrl})");
-                continue;
+            $skip = false;
+            foreach ($site->exclude_pages ?? [] as $pattern) {
+                if (str_contains($normalizedUrl, $pattern)) {
+                    $skip = true; break;
+                }
             }
+            if ($skip || in_array($normalizedUrl, $visited)) continue;
 
-            // Marquer l'URL normalisée comme visitée
             $visited[] = $normalizedUrl;
+            $allUrls[] = ['url' => $normalizedUrl, 'depth' => $depth];
 
-            // Créer un enregistrement de CrawlJob pour cette page spécifique
-            $crawlJob = CrawlJob::create([
-                'id' => (string) Str::uuid(),
-                'site_id' => $site->id,
-                'page_url' => $url, // Garder l'URL originale pour le CrawlJob
-                'status' => 'processing',
-            ]);
+            // Extraction mock
+            $links = $this->extractInternalLinksMock($normalizedUrl, $baseHost, $site);
 
-            try {
-                // Appliquer un éventuel délai de crawl pour ne pas surcharger le serveur
-                if ($site->crawl_delay > 0) {
-                    usleep($site->crawl_delay * 1000000); // Convertir secondes en microsecondes
+            Log::info("Links found for {$normalizedUrl}: " . implode(', ', $links));
+
+            foreach ($links as $link) {
+                if (!in_array($link, $visited, true)) {
+                    $queue[] = ['url' => $link, 'depth' => $depth + 1];
                 }
-
-                // Initialiser le client HttpBrowser pour simuler un navigateur (sans JS)
-                $client = new HttpBrowser(HttpClient::create([
-                    'timeout' => 60, // Temps d'attente max pour la réponse HTTP
-                ]));
-
-                // Effectuer la requête GET
-                $client->request('GET', $url);
-
-                // Obtenir le Crawler pour analyser le HTML récupéré
-                $crawler = $client->getCrawler();
-
-                // --- EXTRACTION DU CONTENU TEXTUEL ---
-                $text = $crawler->filter('body')->text('', true); // Récupérer le texte du body, excluant les enfants
-                $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8'); // Décoder les entités HTML
-                $text = preg_replace('/\s+/', ' ', trim($text)); // Remplacer les espaces multiples par un seul espace
-                // Tronquer le texte pour la comparaison (optionnel, mais peut améliorer les performances)
-                $textForComparison = mb_substr($text, 0, 200); // Premier 200 caractères (à ajuster)
-
-                // --- EXTRACTION DU TITRE ---
-                $title = '';
-                $titleElement = $crawler->filter('title')->first(); // Sélectionner la balise <title>
-                if ($titleElement->count() > 0) {
-                    $title = trim(html_entity_decode($titleElement->text(), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-                }
-                // Normaliser le titre pour la comparaison (enlever espaces, accents éventuellement)
-                $titleForComparison = $this->normalizeContentString($title);
-
-                // Vérifier si ce couple (titre, contenu_tronqué) a déjà été rencontré (doublon de contenu)
-                $contentSignature = md5($titleForComparison . '|' . $textForComparison);
-                if (isset($contentCache[$contentSignature])) {
-                    Log::info("Contenu dupliqué détecté, page ignorée: {$url} (Titre: '{$title}')");
-                    $crawlJob->update(['status' => 'skipped_content_duplicate']); // Statut optionnel pour suivi
-                    continue; // Passer à la suite sans créer de Page ni extraire de liens
-                }
-
-                // --- EXTRACTION DES LIENS INTERNES ---
-                $links = [];
-                // Filtrer toutes les balises <a> ayant un attribut href
-                $crawler->filter('a[href]')->each(function (Crawler $node) use (&$links, $url, $baseHost) {
-                    $href = trim($node->attr('href')); // Récupérer et nettoyer l'attribut href
-
-                    // Ignorer les ancres, les liens mailto:, javascript:, etc.
-                    if (
-                        !$href ||
-                        str_starts_with($href, '#') ||
-                        preg_match('/^(mailto|tel|javascript|ftp|data):/i', $href)
-                    ) {
-                        return; // Passer au lien suivant
-                    }
-
-                    // Résoudre l'URL relative pour obtenir l'URL absolue
-                    $absoluteLink = $this->resolveUrl($href, $url);
-
-                    // Si la résolution a réussi
-                    if ($absoluteLink) {
-                        // Extraire le host de l'URL résolue
-                        $linkHost = parse_url($absoluteLink, PHP_URL_HOST);
-
-                        // Vérifier si le host correspond à celui du site initial (lien interne)
-                        if ($linkHost === $baseHost) {
-                            // Normaliser le lien (par exemple, supprimer le slash final, gérer les paramètres)
-                            $cleanLink = $this->normalizeUrl($absoluteLink);
-
-                            // Vérifier qu'il n'est pas déjà dans la liste des liens extraits pour cette page
-                            // et qu'il n'est pas vide après normalisation
-                            if ($cleanLink && !in_array($cleanLink, $links, true)) {
-                                $links[] = $cleanLink;
-                            }
-                        }
-                    }
-                });
-
-                // Logguer des infos sur la page crawlée (utile pour le débogage)
-                Log::debug("Page crawlée : {$url}", [
-                    'title' => $title,
-                    'links_count' => count($links),
-                    'depth' => $depth, // Inclure la profondeur dans les logs
-                ]);
-
-                // Ajouter la signature de contenu à notre cache temporaire
-                $contentCache[$contentSignature] = true;
-
-                // Créer un enregistrement Page dans la base de données
-                Page::create([
-                    'id' => (string) Str::uuid(),
-                    'site_id' => $site->id,
-                    'crawl_job_id' => $crawlJob->id,
-                    'url' => $url, // Garder l'URL originale pour la Page
-                    'title' => $title,
-                    'content' => $text,
-                ]);
-
-                // Mettre à jour le statut du CrawlJob pour cette page
-                $crawlJob->update(['status' => 'done']);
-
-                // --- AJOUTER LES NOUVEAUX LIENS À LA FILE D'ATTENTE ---
-                foreach ($links as $link) {
-                    // $link est déjà normalisé ici grace à normalizeUrl dans la boucle each
-                    $normalizedLink = $link; // Pour plus de clarté
-
-                    // Vérifier qu'il n'est ni déjà visité (normalisé), ni déjà dans la file (normalisé)
-                    if (!in_array($normalizedLink, $visited, true) && !in_array($normalizedLink, $seenInQueue, true)) {
-                        $seenInQueue[] = $normalizedLink; // Marquer comme vu dans la file
-
-                        // Ajouter le lien normalisé à la file avec la profondeur incrémentée
-                        $queue[] = [
-                            'url' => $normalizedLink,
-                            'depth' => $depth + 1,
-                        ];
-                    }
-                }
-
-            } catch (\Throwable $e) {
-                // Gérer les erreurs de crawl pour une URL spécifique
-                Log::error("Erreur lors du crawl de {$url}", [
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                ]);
-
-                // Mettre à jour le statut du CrawlJob pour cette page en cas d'erreur
-                $crawlJob->update([
-                    'status' => 'error',
-                    'error_message' => $e->getMessage(),
-                ]);
-                // On continue le crawl des autres URLs dans la file, on ne propage pas l'exception ici
-                // pour ne pas échouer le Job entièrement à cause d'une seule page inaccessible.
             }
         }
 
-        $site->update(['status' => 'ready']);
-        Log::info("Crawl terminé pour le site {$site->url}");
+        Log::info("PrepareQueue end: total urls=" . count($allUrls));
+
+        return $allUrls;
     }
+    public function crawlSinglePage(Site $site, string $url, int $depth): ?Page
+    {
+        try {
+            Log::info("Crawl start: {$url}");
+            $client = new HttpBrowser(HttpClient::create(['timeout' => 60]));
+            $client->request('GET', $url);
+            $crawler = $client->getCrawler();
 
+            $text = $crawler->filter('body')->text('', true);
+            Log::info("Contenu body pour {$url}: " . substr($text, 0, 100)); // les 100 premiers caractères
+            $text = preg_replace('/\s+/', ' ', trim(html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+            $title = $crawler->filter('title')->count() ? trim(html_entity_decode($crawler->filter('title')->text(), ENT_QUOTES | ENT_HTML5, 'UTF-8')) : '';
 
+            return Page::create([
+                'id' => (string) Str::uuid(),
+                'site_id' => $site->id,
+                'url' => $url,
+                'title' => $title,
+                'content' => $text,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error("Erreur crawl page: {$url}", ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
     /**
      * Normalise une URL pour la comparaison.
      * Exemple de normalisation : suppression des slashs finaux, minuscules pour le host, tri des paramètres (optionnel).
@@ -246,27 +127,21 @@ class CrawlService
         $path = $this->normalizePath($path);
 
         // Reconstituer l'URL
-        $normalized = $scheme . '://' . $host . $path;
+        $normalized = $scheme . '://' . $host;
 
-        // Ajouter port si spécifié
         if (isset($components['port'])) {
             $normalized .= ':' . $components['port'];
         }
+
+        $normalized .= $path;
 
         // Ajouter query string si spécifiée (et la normaliser si pertinent, ici on la laisse telle quelle)
         if (isset($components['query'])) {
             $normalized .= '?' . $components['query']; // Pour une normalisation avancée, trier les paramètres ici
         }
 
-        // Ajouter fragment si spécifié (généralement ignoré pour la comparaison de page, mais on le garde ici si présent)
-        if (isset($components['fragment'])) {
-            $normalized .= '#' . $components['fragment'];
-        }
-
         return $normalized;
     }
-
-
     /**
      * Normalise un morceau de texte (titre par exemple) pour la comparaison de contenu.
      *
@@ -283,8 +158,6 @@ class CrawlService
         // $str = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $str); // Cela retire les accents
         return $str;
     }
-
-
     /**
      * Résout une URL relative à partir d'une URL de base.
      * Remplace la logique de UriHttp::resolve.
@@ -333,7 +206,6 @@ class CrawlService
         $port = isset($baseComponents['port']) ? ':' . $baseComponents['port'] : '';
         return $scheme . '://' . $host . $port . $newPath;
     }
-
     /**
      * Normalise un chemin en résolvant ./ et ../
      *
@@ -373,4 +245,77 @@ class CrawlService
 
         return $result;
     }
+    /**
+     * Simule l'extraction des liens internes d'une page pour préparer la queue de crawl.
+     * Cette fonction ne fait pas le vrai crawl mais retourne les URLs internes filtrées.
+     *
+     * @param string $url L'URL de la page en cours de traitement
+     * @param string $baseHost Le host du site (ex: example.com)
+     * @param Site $site L'instance du site
+     * @return array Tableau de liens internes à crawler
+     */
+    private function extractInternalLinksMock(string $url, string $baseHost, Site $site): array
+    {
+        $links = [];
+
+        try {
+            // Initialiser le client HttpBrowser
+            $client = new HttpBrowser(HttpClient::create(['timeout' => 30]));
+            $client->request('GET', $url);
+            $crawler = $client->getCrawler();
+
+            // Extraire tous les liens <a href="">
+            $crawler->filter('a[href]')->each(function ($node) use (&$links, $baseHost, $site) {
+                $href = trim($node->attr('href'));
+
+                // Ignorer les liens inutiles
+                if (!$href || str_starts_with($href, '#') || preg_match('/^(mailto|tel|javascript|ftp|data):/i', $href)) {
+                    return;
+                }
+
+                // Résoudre l'URL relative
+                $absoluteLink = $this->resolveUrl($href, $site->url);
+                if (!$absoluteLink) return;
+
+                $linkHost = parse_url($absoluteLink, PHP_URL_HOST);
+
+                // Vérifier que le lien est interne au site
+                if ($linkHost !== $baseHost) return;
+
+                // Normaliser le lien
+                $normalizedLink = $this->normalizeUrl($absoluteLink);
+
+                // Vérifier les règles include_pages si définies
+                if (!empty($site->include_pages)) {
+                    $allowed = false;
+                    foreach ($site->include_pages as $allowedPath) {
+                        $parsedPath = parse_url($normalizedLink, PHP_URL_PATH) ?? '';
+                        if (str_starts_with($parsedPath . '/', $allowedPath . '/')) {
+                            $allowed = true;
+                            break;
+                        }
+                    }
+                    if (!$allowed) return;
+                }
+
+                // Vérifier les règles exclude_pages
+                foreach ($site->exclude_pages ?? [] as $pattern) {
+                    if (str_contains($normalizedLink, $pattern)) return;
+                }
+
+                // Ajouter le lien si pas déjà présent
+                if (!in_array($normalizedLink, $links, true)) {
+                    $links[] = $normalizedLink;
+                }
+            });
+        } catch (\Throwable $e) {
+            Log::warning("Impossible d'extraire les liens internes pour {$url}", [
+                'site_id' => $site->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $links;
+    }
+
 }

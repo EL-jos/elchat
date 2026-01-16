@@ -8,6 +8,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Site extends BaseModel
 {
+    protected $casts = [
+        'exclude_pages' => 'array',
+        'include_pages' => 'array', // ✅ nouveau
+    ];
     public function account(): BelongsTo
     {
         return $this->belongsTo(Account::class);
@@ -27,5 +31,12 @@ class Site extends BaseModel
     public function unansweredQuestions(): HasMany
     {
         return $this->hasMany(UnansweredQuestion::class);
+    }
+    public function type(): BelongsTo{
+        return $this->belongsTo(TypeSite::class);
+    }
+
+    public function documents(){
+        return $this->morphMany(Document::class, 'documentable');
     }
 }
