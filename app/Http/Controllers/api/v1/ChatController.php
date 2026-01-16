@@ -16,17 +16,24 @@ class ChatController extends Controller
         $data = $request->validate([
             'site_id' => 'required|exists:sites,id',
             'question' => 'required|string|max:1000',
+            'conversation_id' => 'nullable|exists:conversations,id',
         ]);
 
         $site = Site::where('id', $data['site_id'])
             ->where('account_id', auth()->user()->account_id)
             ->firstOrFail();
 
-        // Créer une conversation
-        $conversation = Conversation::create([
-            'site_id' => $site->id,
-            'user_id' => auth()->id(),
-        ]);
+        // 🔑 Continuité OU nouvelle conversation
+        if (!empty($data['conversation_id'])) {
+            $conversation = Conversation::where('id', $data['conversation_id'])
+                ->where('user_id', auth()->id())
+                ->firstOrFail();
+        } else {
+            $conversation = Conversation::create([
+                'site_id' => $site->id,
+                'user_id' => auth()->id(),
+            ]);
+        }
 
         // Sauvegarder la question
         Message::create([
@@ -36,8 +43,12 @@ class ChatController extends Controller
             'content' => $data['question'],
         ]);
 
-        // Générer la réponse
-        $answer = $chatService->answer($site, $data['question']);
+        // Générer la réponse (🧠 avec mémoire)
+        $answer = $chatService->answer(
+            site: $site,
+            question: $data['question'],
+            conversation: $conversation
+        );
 
         // Sauvegarder la réponse
         Message::create([

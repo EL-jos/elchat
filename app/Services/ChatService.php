@@ -54,16 +54,39 @@ class ChatService
     }
 
     /**
-     * Répond à une question avec un style commercial et fluide
+     * Réponse commerciale incarnée (mode production)
      */
-    public function answer(Site $site, string $question): string
+    public function answer(Site $site, string $question, Conversation $conversation): string
     {
+
+        $history = Message::where('conversation_id', $conversation->id)
+            ->orderBy('created_at', 'desc')
+            ->skip(1)
+            ->take(6)
+            ->get()
+            ->reverse()
+            ->map(function ($m) {
+                if ($m->role === 'bot') {
+                    return [
+                        'role' => 'assistant',
+                        'content' => '[Réponse précédente donnée au client]',
+                    ];
+                }
+
+                return [
+                    'role' => 'user',
+                    'content' => $m->content,
+                ];
+            })
+            ->toArray();
+
         // 1️⃣ Embedding de la question
         $questionEmbedding = $this->embeddingService->getEmbedding($question);
 
-        // 2️⃣ Récupérer les chunks du site
-        $chunks = Chunk::whereHas('page', fn($q) => $q->where('site_id', $site->id))
-            ->get();
+        // 2️⃣ Charger les chunks du site
+        $chunks = Chunk::whereHas('page', fn ($q) =>
+        $q->where('site_id', $site->id)
+        )->get();
 
         $scored = [];
 
@@ -73,7 +96,7 @@ class ChatService
                 $chunk->embedding
             );
 
-            if ($score >= 0.3) { // seuil plus bas pour attraper plus d'infos
+            if ($score >= 0.30) {
                 $scored[] = [
                     'text' => $chunk->text,
                     'score' => $score,
@@ -81,64 +104,127 @@ class ChatService
             }
         }
 
-        // 🔹 Log debug
-        Log::info('RAG DEBUG', [
-            'question' => $question,
-            'chunks_count' => $chunks->count(),
-            'top_scores' => collect($chunks)->map(fn($c) =>
-            $this->similarityService->cosine($questionEmbedding, $c->embedding)
-            )->sortDesc()->take(5)->values()
-        ]);
-
-        // 3️⃣ Si aucun chunk pertinent → fallback
+        // 3️⃣ Construire le contexte
         if (empty($scored)) {
             UnansweredQuestion::create([
                 'site_id' => $site->id,
                 'question' => $question,
             ]);
 
-            // On met un contexte générique pour que l'IA crée une réponse persuasive
-            $context = "Aucune information exacte n'est disponible sur le site pour cette question.";
+            // ⚠️ Fallback HUMAIN (clé de l’illusion)
+            $context = "Nous n'avons pas communiqué publiquement cette information pour le moment.";
         } else {
-            // 4️⃣ Trier par score et limiter top 3
-            usort($scored, fn($a, $b) => $b['score'] <=> $a['score']);
+            usort($scored, fn ($a, $b) => $b['score'] <=> $a['score']);
+
             $context = collect(array_slice($scored, 0, 3))
                 ->pluck('text')
                 ->implode("\n\n---\n\n");
         }
 
-        // 5️⃣ Appel LLM commercial
-        return $this->callLLM($question, $context);
+        $isSelectionQuestion = preg_match('/moins cher|meilleur|choisir|recommander|quel/i', $question);
+        if ($isSelectionQuestion && empty($scored)) {
+            $context = "Nous proposons plusieurs produits, mais nous ne communiquons pas de classement par prix.";
+        }
+
+
+        return $this->callLLM($site, $question, $context, $history);
     }
 
     /**
-     * Appel LLM (OpenRouter/OpenAI)
-     * Appel LLM pour réponse commerciale fluide
+     * Appel LLM avec PERSONA EMPLOYÉ INTERNE
      */
-    private function callLLM(string $question, string $context): string
+    private function callLLM(Site $site, string $question, string $context, array $history): string
     {
+        $companyName = $site->name ?? parse_url($site->url, PHP_URL_HOST);
+
+        $isBuyingIntent = preg_match('/prix|acheter|commander|disponible|livraison/i', $question);
+        $isComparison = preg_match('/compar|différence|vs|meilleur/i', $question);
+        $isConcern = preg_match('/durée|garantie|retour|risque|qualité/i', $question);
+
+
+        $systemPrompt = <<<PROMPT
+        Tu es un employé réel de l'entreprise "{$companyName}".
+
+        RÈGLES STRICTES :
+        - Tu parles à la PREMIÈRE PERSONNE (nous / chez nous / notre équipe).
+        - Tu ne mentionnes JAMAIS :
+          - le mot "contexte"
+          - le site web
+          - une source
+          - une analyse
+          - une intelligence artificielle
+        - Tu réponds comme si tu travaillais réellement dans l'entreprise.
+        - Ton ton est professionnel, naturel, commercial et rassurant.
+        - Tu n'inventes JAMAIS une caractéristique technique, un prix ou une garantie.
+        - Tu peux reformuler, expliquer ou valoriser, mais jamais créer une information factuelle.
+        - Si intention d’achat : rassure et incite à passer à l’action
+        - Si hésitation : rassure
+        - Si comparaison : valorise sans dénigrer
+        - Termine si possible par une proposition d’aide naturelle (sans forcer la vente).
+        - Tu ne fais jamais de promesse engageante (résultat garanti, effet certain, engagement contractuel).
+        - Si la conversation est déjà entamée, tu ne recommences jamais par une formule de salutation.
+
+        RÈGLE ABSOLUE SUR LA CONVERSATION :
+        - Les messages précédents servent UNIQUEMENT à comprendre le besoin du client.
+        - Les informations factuelles doivent PROVENIR EXCLUSIVEMENT des "Informations internes".
+        - Si une information n’est PAS présente dans les informations internes, tu dois :
+          - rester général
+          - ou proposer d’aider autrement
+        - Tu ne dois JAMAIS déduire un produit, une offre ou un prix à partir d’une réponse précédente.
+        INTERDICTION ABSOLUE :
+        - Tu ne dois JAMAIS citer un nom de produit, pack ou offre
+          s’il n’apparaît PAS explicitement mot pour mot
+          dans les Informations internes.
+
+        RÔLE :
+        Conseiller commercial / employé de l’entreprise.
+        PROMPT;
+
+        $userPrompt = <<<PROMPT
+        Informations internes à utiliser si pertinentes :
+        {$context}
+
+        Question d’un client :
+        {$question}
+
+        Réponds directement au client, comme si tu lui parlais en face.
+
+        Type de demande :
+        - Si la question concerne un PRODUIT → mets en avant ses bénéfices.
+        - Si elle concerne un SERVICE → explique l’accompagnement.
+        - Si elle est GÉNÉRALE → rassure et oriente.
+
+        Signal détecté :
+        - Intention d’achat : {$isBuyingIntent}
+        - Comparaison : {$isComparison}
+        - Inquiétude : {$isConcern}
+        PROMPT;
+
+        $messages = [
+            ['role' => 'system', 'content' => $systemPrompt],
+        ];
+
+        // 🧠 mémoire conversationnelle
+        foreach ($history as $msg) {
+            $messages[] = $msg;
+        }
+
+        // question actuelle (avec contexte RAG)
+        $messages[] = [
+            'role' => 'user',
+            'content' => $userPrompt,
+        ];
+
         $response = Http::withHeaders([
             'Authorization' => 'Bearer ' . env('OPENROUTER_API_KEY'),
         ])->post('https://openrouter.ai/api/v1/chat/completions', [
-            'model' => 'meta-llama/llama-3.1-8b-instruct', // ou gpt-3.5-turbo si préféré
-            'messages' => [
-                [
-                    'role' => 'system',
-                    'content' =>
-                        "Tu es un commercial expert. Utilise le CONTEXTE fourni pour répondre à la question. "
-                        . "Même si le CONTEXTE n'a pas l'information exacte, crée une réponse fluide, persuasive et commerciale."
-                ],
-                [
-                    'role' => 'user',
-                    'content' =>
-                        "CONTEXTE:\n{$context}\n\nQUESTION:\n{$question}"
-                ]
-            ],
-            'temperature' => 0.7, // plus créatif et commercial
-            'max_tokens' => 400,
+            'model' => 'meta-llama/llama-3.1-8b-instruct',
+            'messages' => $messages,
+            'temperature' => 0.6,
+            'max_tokens' => 350,
         ]);
 
         return $response->json()['choices'][0]['message']['content']
-            ?? "Je ne trouve pas cette information sur ce site.";
+            ?? "N'hésitez pas à nous contacter, nous serons ravis de vous aider.";
     }
 }
