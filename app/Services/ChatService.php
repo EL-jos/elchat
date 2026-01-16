@@ -6,6 +6,8 @@ use App\Models\Chunk;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\UnansweredQuestion;
+use Exception;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -126,7 +128,7 @@ class ChatService
             $context = "Nous proposons plusieurs produits, mais nous ne communiquons pas de classement par prix.";
         }
 
-
+        // Appel à la nouvelle version de callLLM avec retry
         return $this->callLLM($site, $question, $context, $history);
     }
 
@@ -215,16 +217,110 @@ class ChatService
             'content' => $userPrompt,
         ];
 
-        $response = Http::withHeaders([
-            'Authorization' => 'Bearer ' . env('OPENROUTER_API_KEY'),
-        ])->post('https://openrouter.ai/api/v1/chat/completions', [
-            'model' => 'meta-llama/llama-3.1-8b-instruct',
-            'messages' => $messages,
-            'temperature' => 0.6,
-            'max_tokens' => 350,
+        // --- DÉBUT DE LA LOGIQUE DE RETRY ---
+        $maxRetries = 5;
+        $delaySeconds = 1; // Délai de base pour le backoff exponentiel
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+
+                Log::info("Appel à l'API LLM (tentative {$attempt})", ['site_id' => $site->id, 'question' => substr($question, 0, 100)]);
+
+                $response = Http::withHeaders([
+                    'Authorization' => 'Bearer ' . env('OPENROUTER_API_KEY'),
+                    'Content-Type' => 'application/json', // Bonne pratique
+                ])->post('https://openrouter.ai/api/v1/chat/completions', [
+                    'model' => 'meta-llama/llama-3.1-8b-instruct',
+                    'messages' => $messages,
+                    'temperature' => 0.6,
+                    'max_tokens' => 350,
+                ]);
+
+                // Vérifier si la requête HTTP a échoué (statut 4xx, 5xx)
+                if (!$response->successful()) {
+                    $errorMessage = "Erreur HTTP API LLM (tentative {$attempt}): " . $response->status() . " - " . $response->body();
+                    Log::warning($errorMessage);
+                    // Si ce n'est pas la dernière tentative, attendre avant de réessayer
+                    if ($attempt < $maxRetries) {
+                        $newAttempt = $attempt + 1;
+                        Log::info("Attente de {$delaySeconds}s avant la tentative {$newAttempt}...");
+                        sleep($delaySeconds);
+                        $delaySeconds *= 2; // Backoff exponentiel
+                        continue; // Passer à la prochaine itération de la boucle (réessayer)
+                    } else {
+                        // C'est la dernière tentative, sortir de la boucle pour lever l'exception ou retourner le fallback
+                        break; // Sortir de la boucle pour gérer l'échec final
+                    }
+                }
+
+                // La requête a réussi, vérifier la structure de la réponse
+                $responseData = $response->json();
+
+                // Vérifier si la structure attendue est présente
+                if (isset($responseData['choices']) && is_array($responseData['choices']) && count($responseData['choices']) > 0) {
+                    $choice = $responseData['choices'][0];
+                    if (isset($choice['message']) && isset($choice['message']['content'])) {
+                        $content = $choice['message']['content'];
+                        Log::info("Réponse API LLM reçue (tentative {$attempt})", ['content_length' => strlen($content)]);
+                        return $content;
+                    } else {
+                        $errorMessage = "Structure de réponse API LLM invalide (tentative {$attempt}): 'choices.0.message.content' manquant";
+                        Log::warning($errorMessage, ['response_data' => $responseData]);
+                    }
+                } else {
+                    $errorMessage = "Structure de réponse API LLM invalide (tentative {$attempt}): 'choices' manquant ou vide";
+                    Log::warning($errorMessage, ['response_data' => $responseData]);
+                }
+
+                // Si on arrive ici, c'est que la réponse n'était pas correctement formatée
+                // Si ce n'est pas la dernière tentative, attendre avant de réessayer
+                if ($attempt < $maxRetries) {
+                    $newAttempt = $attempt + 1;
+                    Log::info("Attente de {$delaySeconds}s avant la tentative {$newAttempt}...");
+                    sleep($delaySeconds);
+                    $delaySeconds *= 2; // Backoff exponentiel
+                    continue; // Passer à la prochaine itération de la boucle (réessayer)
+                }
+
+                /*return $response->json()['choices'][0]['message']['content']
+                    ?? "N'hésitez pas à nous contacter, nous serons ravis de vous aider.";*/
+
+            }catch (RequestException $e) {
+                $errorMessage = "Erreur de requête HTTP (tentative {$attempt}): " . $e->getMessage();
+                Log::warning($errorMessage);
+                // Si ce n'est pas la dernière tentative
+                $newAttempt = $attempt+1;
+                if ($attempt < $maxRetries) {
+                    Log::info("Attente de {$delaySeconds}s avant la tentative {$newAttempt}...");
+                    sleep($delaySeconds);
+                    $delaySeconds *= 2; // Backoff exponentiel
+                    continue; // Passer à la prochaine itération de la boucle (réessayer)
+                }
+            } catch (Exception $e) { // Capture d'autres exceptions potentielles (JSON invalide, etc.)
+                $errorMessage = "Erreur inattendue lors de l'appel API (tentative {$attempt}): " . $e->getMessage();
+                Log::error($errorMessage, ['exception' => $e]);
+                // Si ce n'est pas la dernière tentative
+                if ($attempt < $maxRetries) {
+                    $newAttempt = $attempt+1;
+                    Log::info("Attente de {$delaySeconds}s avant la tentative {$newAttempt}...");
+                    sleep($delaySeconds);
+                    $delaySeconds *= 2; // Backoff exponentiel
+                    continue; // Passer à la prochaine itération de la boucle (réessayer)
+                }
+            }
+        }
+
+        // --- FIN DE LA BOUCLE DE RETRY ---
+        // Si on arrive ici, c'est que toutes les tentatives ont échoué
+        $finalErrorMessage = "Échec de l'appel API LLM après {$maxRetries} tentatives.";
+        Log::error($finalErrorMessage, [
+            'site_id' => $site->id,
+            'question' => substr($question, 0, 100), // Logguer une partie de la question pour le contexte
         ]);
 
-        return $response->json()['choices'][0]['message']['content']
-            ?? "N'hésitez pas à nous contacter, nous serons ravis de vous aider.";
+        // RETOUR MANQUANT AJOUTÉ ICI
+        return "N'hésitez pas à nous contacter, nous serons ravis de vous aider.";
+        // OU Optionnellement, vous pouvez lever une exception ici si le contrôleur doit la gérer
+        // throw new Exception($finalErrorMessage);
+
     }
 }
