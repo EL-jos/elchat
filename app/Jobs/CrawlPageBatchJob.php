@@ -45,7 +45,7 @@ class CrawlPageBatchJob implements ShouldQueue
             $crawlJob->update(['status' => 'processing']);
 
             try {
-                $page = $crawlService->crawlSinglePage($site, $url, 0);
+                $page = $crawlService->crawlSinglePage($site, $url, 0, $crawlJob->id);
 
                 if ($page) {
                     $indexService->chunkAndIndex($page);

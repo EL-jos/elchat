@@ -39,7 +39,6 @@ class SiteController extends Controller
         $sites = Site::where('account_id', $accountId)->get();
         return response()->json($sites);
     }
-
     /**
      * Créer un nouveau site
      */
@@ -70,7 +69,6 @@ class SiteController extends Controller
 
         return response()->json($site, 201);
     }
-
     /**
      * Afficher un site spécifique
      */
@@ -81,7 +79,6 @@ class SiteController extends Controller
             ->firstOrFail();
         return response()->json($site);
     }
-
     /**
      * Mettre à jour un site
      */
@@ -100,7 +97,6 @@ class SiteController extends Controller
         $site->update($validated);
         return response()->json($site);
     }
-
     /**
      * Supprimer un site
      */
@@ -113,7 +109,6 @@ class SiteController extends Controller
         $site->delete();
         return response()->json(['message'=>'Site deleted']);
     }
-
     /**
      * Trigger Crawl + Index pour un site
      */

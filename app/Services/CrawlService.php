@@ -75,7 +75,7 @@ class CrawlService
 
         return $allUrls;
     }
-    public function crawlSinglePage(Site $site, string $url, int $depth): ?Page
+    public function crawlSinglePage(Site $site, string $url, int $depth, ?string $crawlJobId = null): ?Page
     {
         try {
             Log::info("Crawl start: {$url}");
@@ -91,6 +91,7 @@ class CrawlService
             return Page::create([
                 'id' => (string) Str::uuid(),
                 'site_id' => $site->id,
+                'crawl_job_id' => $crawlJobId, // <-- ajouter
                 'url' => $url,
                 'title' => $title,
                 'content' => $text,
