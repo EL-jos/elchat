@@ -15,7 +15,7 @@ return new class extends Migration
             $table->uuid('id')->primary();
             $table->uuid('account_id');
             $table->string('url');
-            $table->enum('status', ['pending', 'crawling', 'ready', 'error'])->default('pending');
+            $table->enum('status', ['pending', 'crawling', 'ready', 'error', 'indexing'])->default('pending');
             $table->integer('crawl_depth')->default(2);
             $table->timestamps();
 

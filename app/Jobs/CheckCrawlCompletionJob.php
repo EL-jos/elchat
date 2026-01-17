@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\CrawlJob;
 use App\Models\Page;
 use App\Models\Site;
+use App\Services\IndexService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
@@ -26,21 +27,26 @@ class CheckCrawlCompletionJob implements ShouldQueue
         $this->siteId = $siteId;
     }
 
-    public function handle()
+    public function handle(IndexService $indexService)
     {
         $site = Site::find($this->siteId);
         if (!$site) return;
 
-        $pendingJobs = CrawlJob::where('site_id', $site->id)
-            ->whereIn('status', ['pending', 'processing'])
+        // 1️⃣ Vérifier s'il reste des CrawlJob non terminés
+        $remaining = CrawlJob::where('site_id', $site->id)
+            ->whereNotIn('status', ['done', 'error'])
             ->count();
 
-        if ($pendingJobs === 0) {
-            $site->update(['status' => 'ready']);
-            Log::info("Crawl terminé pour le site {$site->url} ✅");
-        } else {
+        if ($remaining > 0) {
+            // Replanifier la vérification
             self::dispatch($this->siteId)->delay(now()->addSeconds(10));
+            return;
         }
+
+        // 3️⃣ Marquer le site comme prêt
+        $site->update(['status' => 'ready']);
+
+        Log::info("Indexation complète terminée pour le site {$site->id}");
     }
 }
 

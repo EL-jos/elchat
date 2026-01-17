@@ -11,7 +11,9 @@ use App\Models\Site;
 use App\Services\CrawlService;
 use App\Services\IndexService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\FacadesLog;
 use Illuminate\Support\Str;
 use Symfony\Component\BrowserKit\HttpBrowser;
@@ -89,12 +91,27 @@ class SiteController extends Controller
             ->firstOrFail();
 
         $validated = $request->validate([
-            'url' => 'nullable|url',
+            'url' => 'required|url',
             'crawl_depth' => 'nullable|integer|min:1|max:5',
-            'status' => 'nullable|in:pending,crawling,ready,error'
+            'status' => 'nullable|in:pending,crawling,ready,error',
+            'type_site_id' => 'required|exists:type_sites,id',
+            'company_name' => 'nullable|string|max:255',
+            'exclude_pages' => 'nullable|array',
+            'exclude_pages.*' => 'string',
+            'include_pages' => 'nullable|array',
+            'include_pages.*' => 'string',
         ]);
 
-        $site->update($validated);
+        $site->update([
+            'account_id' => auth()->user()->account_id,
+            'type_site_id' => $validated['type_site_id'],
+            'company_name' => $validated['company_name'],
+            'url' => $validated['url'],
+            'crawl_depth' => $validated['crawl_depth'] ?? 1,
+            'crawl_delay' => $validated['crawl_delay'] ?? 0,
+            'exclude_pages' => $validated['exclude_pages'] ?? [],
+            'include_pages' => $validated['include_pages'] ?? null,
+        ]);
         return response()->json($site);
     }
     /**
@@ -128,27 +145,5 @@ class SiteController extends Controller
             'message' => 'Crawl started in background',
             'site' => $site
         ]);
-    }
-    public function uploadDocument(Request $request, Site $site)
-    {
-        $this->authorize('update', $site);
-
-        $validated = $request->validate([
-            'file' => 'required|file|max:20480',
-            'type' => 'required|in:image,file,other',
-            'priority' => 'required|integer|min:1|max:10'
-        ]);
-
-        $path = $request->file('file')->store('documents');
-
-        $document = Document::create([
-            'type' => $validated['type'],
-            'path' => $path,
-            'priority' => $validated['priority']
-        ]);
-
-        $site->documents()->attach($document->id);
-
-        return response()->json($document, 201);
     }
 }

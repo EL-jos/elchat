@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\api\v1\ChatController;
+use App\Http\Controllers\api\v1\ManualContentController;
+use App\Http\Controllers\api\v1\SitemapController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\api\v1\SiteController;
 use App\Http\Controllers\api\v1\AuthController;
@@ -25,8 +27,11 @@ Route::prefix('v1')->group(function () {
         Route::apiResource('site', SiteController::class);
         Route::controller(SiteController::class)->group(function () {
             Route::post('site/{id}/crawl', 'crawl');
+            Route::post('site/{site_id}/documents', 'uploadDocument');
         });
         Route::post('/chat/ask', [ChatController::class, 'ask']);
+        Route::post('/site/{site}/manual-content', [ManualContentController::class, 'store']);
+        Route::post('/site/{site}/sitemap', [SitemapController::class, 'store']);
     });
 
 
