@@ -33,12 +33,5 @@ Route::prefix('v1')->group(function () {
         Route::post('/site/{site}/manual-content', [ManualContentController::class, 'store']);
         Route::post('/site/{site}/sitemap', [SitemapController::class, 'store']);
     });
-
-
-    Route::get('/test-log', function () {
-        Log::debug('✅ Test de log DEBUG');
-        Log::info('✅ Test de log INFO');
-        return 'Logs envoyés ! Vérifie storage/logs/laravel.log';
-    });
 });
 

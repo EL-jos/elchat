@@ -49,7 +49,10 @@ class CrawlPageBatchJob implements ShouldQueue
 
                 if ($page) {
                     // Index uniquement les pages
-                    $indexService->chunkAndIndex($page); //$indexService->chunkAndIndex($page);
+                    $indexService->indexPage($page, [
+                        'source' => 'crawl',
+                        'site_id' => $site->id,
+                    ]);
                 }
 
                 $crawlJob->update(['status' => 'done']);

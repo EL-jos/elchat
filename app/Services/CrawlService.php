@@ -95,6 +95,7 @@ class CrawlService
                 'url' => $url,
                 'title' => $title,
                 'content' => $text,
+                'source' => "crawl"
             ]);
         } catch (\Throwable $e) {
             Log::error("Erreur crawl page: {$url}", ['error' => $e->getMessage()]);

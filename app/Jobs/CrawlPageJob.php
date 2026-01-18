@@ -39,7 +39,10 @@ class CrawlPageJob implements ShouldQueue
 
         if ($page) {
             Log::info("Page créée pour {$this->url} avec ID {$page->id}");
-            $indexService->chunkAndIndex($page);
+            $indexService->indexPage($page, [
+                'source' => 'crawl_single',
+                'site_id' => $site->id,
+            ]);
         } else {
             Log::warning("Page non créée pour {$this->url}");
         }

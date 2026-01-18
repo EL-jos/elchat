@@ -60,7 +60,10 @@ class ScrapeSitemapUrlJob implements ShouldQueue
             );
 
             // Chunk + embeddings
-            $indexService->chunkAndIndex($page);
+            $indexService->indexPage($page, [
+                'source' => 'sitemap',
+                'site_id' => $this->site->id,
+            ]);
 
             Log::info("Page sitemap crawlee: {$this->url}");
 

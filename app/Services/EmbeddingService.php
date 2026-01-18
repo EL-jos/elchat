@@ -25,6 +25,11 @@ class EmbeddingService
                 'input' => $text
             ]);
 
+            if (!$response->successful()) {
+                usleep(500_000);
+                continue;
+            }
+
             $json = $response->json();
 
             if (isset($json['data'][0]['embedding'])) {

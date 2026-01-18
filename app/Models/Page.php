@@ -8,6 +8,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Page extends BaseModel
 {
+    protected $casts = [
+        'is_indexed' => 'boolean',
+    ];
+
     public function site(): BelongsTo
     {
         return $this->belongsTo(Site::class);
