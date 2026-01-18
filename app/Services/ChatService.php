@@ -86,9 +86,12 @@ class ChatService
         $questionEmbedding = $this->embeddingService->getEmbedding($question);
 
         // 2️⃣ Charger les chunks du site
-        $chunks = Chunk::whereHas('page', fn ($q) =>
-        $q->where('site_id', $site->id)
-        )->get();
+        //$chunks = Chunk::where('site_id', $site->id)->get();
+        $chunks = Chunk::where('site_id', $site->id)
+            ->whereIn('source_type', ['woocommerce','page','document'])
+            //->limit(3000)
+            ->get();
+
 
         $scored = [];
 
@@ -98,7 +101,7 @@ class ChatService
                 $chunk->embedding
             );
 
-            if ($score >= 0.30) {
+            if ($score >= 0.30) { //0.39 ou 0.45 sont bon aussi
                 $scored[] = [
                     'text' => $chunk->text,
                     'score' => $score,
@@ -107,14 +110,24 @@ class ChatService
         }
 
         // 3️⃣ Construire le contexte
-        if (empty($scored)) {
+
+        $minRequiredChunks = 1;
+        $minConfidenceScore = 0.30; //0.39 ou 0.45 sont bon aussi
+
+        $validChunks = array_filter($scored, fn ($c) =>
+            $c['score'] >= $minConfidenceScore
+        );
+
+        if (count($validChunks) < $minRequiredChunks) {
             UnansweredQuestion::create([
                 'site_id' => $site->id,
                 'question' => $question,
             ]);
 
             // ⚠️ Fallback HUMAIN (clé de l’illusion)
-            $context = "Nous n'avons pas communiqué publiquement cette information pour le moment.";
+            //$context = "Nous n'avons pas communiqué publiquement cette information pour le moment.";
+            return "Je n’ai pas trouvé cette information dans les données de notre entreprise.
+                    N’hésitez pas à nous préciser votre besoin ou à nous contacter directement.";
         } else {
             usort($scored, fn ($a, $b) => $b['score'] <=> $a['score']);
 
@@ -124,9 +137,15 @@ class ChatService
         }
 
         $isSelectionQuestion = preg_match('/moins cher|meilleur|choisir|recommander|quel/i', $question);
-        if ($isSelectionQuestion && empty($scored)) {
-            $context = "Nous proposons plusieurs produits, mais nous ne communiquons pas de classement par prix.";
+        if ($isSelectionQuestion && empty($validChunks)) {
+            //$context = "Nous proposons plusieurs produits, mais nous ne communiquons pas de classement par prix.";
+            return "Je peux vous expliquer nos offres si vous me précisez votre besoin.";
         }
+
+        if (trim($context) === '') {
+            return "Je n’ai pas d’information fiable à ce sujet pour le moment.";
+        }
+
 
         // Appel à la nouvelle version de callLLM avec retry
         return $this->callLLM($site, $question, $context, $history);
@@ -148,7 +167,7 @@ class ChatService
         Tu es un employé réel de l'entreprise "{$companyName}".
 
         RÈGLES STRICTES :
-        - Tu parles à la PREMIÈRE PERSONNE (nous / chez nous / notre équipe).
+        - Tu parles à la PREMIÈRE PERSONNE (nous / chez nous / notre équipe/ chez "{$companyName}").
         - Tu ne mentionnes JAMAIS :
           - le mot "contexte"
           - le site web
@@ -318,7 +337,7 @@ class ChatService
         ]);
 
         // RETOUR MANQUANT AJOUTÉ ICI
-        return "N'hésitez pas à nous contacter, nous serons ravis de vous aider.";
+        return "Notre équipe chez {$companyName} reste disponible pour vous accompagner.";
         // OU Optionnellement, vous pouvez lever une exception ici si le contrôleur doit la gérer
         // throw new Exception($finalErrorMessage);
 

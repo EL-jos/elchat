@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\api\v1\ChatController;
+use App\Http\Controllers\api\v1\DocumentController;
 use App\Http\Controllers\api\v1\ManualContentController;
 use App\Http\Controllers\api\v1\SitemapController;
 use Illuminate\Support\Facades\Route;
@@ -32,6 +33,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/chat/ask', [ChatController::class, 'ask']);
         Route::post('/site/{site}/manual-content', [ManualContentController::class, 'store']);
         Route::post('/site/{site}/sitemap', [SitemapController::class, 'store']);
+        Route::post('/site/{site}/document', [DocumentController::class, 'store']);
     });
 });
 

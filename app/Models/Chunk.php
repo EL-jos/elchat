@@ -9,6 +9,7 @@ class Chunk extends BaseModel
 {
     protected $casts = [
         'embedding' => 'array',
+        'metadata' => 'array'
     ];
 
     public function page(): BelongsTo

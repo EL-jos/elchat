@@ -27,7 +27,10 @@ class ManualContentController extends Controller
             'content' => $validated['content'],
         ]);
 
-        app(IndexService::class)->chunkAndIndex($page);
+        app(IndexService::class)->indexPage($page, [
+            'source' => 'manuel',
+            'site_id' => $site->id,
+        ]);
 
         return response()->json([
             'message' => 'Manual content indexed successfully',
