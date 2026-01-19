@@ -88,7 +88,7 @@ class ChatService
         // 2️⃣ Charger les chunks du site
         //$chunks = Chunk::where('site_id', $site->id)->get();
         $chunks = Chunk::where('site_id', $site->id)
-            ->whereIn('source_type', ['woocommerce','page','document'])
+            ->whereIn('source_type', ['woocommerce','page','document', 'sitemap'])
             //->limit(3000)
             ->get();
 

@@ -27,6 +27,11 @@ class CrawlService
         // Si include_pages fourni → crawl ciblé
         if (!empty($site->include_pages)) {
             foreach ($site->include_pages as $path) {
+                // Si wildcard → on démarre depuis la base
+                if (str_contains($path, '*')) {
+                    $queue[] = ['url' => $baseUrl, 'depth' => 0];
+                    continue;
+                }
                 $resolved = $this->resolveUrl($path, $baseUrl);
                 Log::info("Include page resolved: {$resolved}");
                 $queue[] = ['url' => $resolved, 'depth' => 0];
@@ -50,7 +55,7 @@ class CrawlService
 
             $skip = false;
             foreach ($site->exclude_pages ?? [] as $pattern) {
-                if (str_contains($normalizedUrl, $pattern)) {
+                if ($this->urlMatchesPattern($normalizedUrl, $pattern)) {
                     $skip = true; break;
                 }
             }
@@ -276,7 +281,7 @@ class CrawlService
                 }
 
                 // Résoudre l'URL relative
-                $absoluteLink = $this->resolveUrl($href, $site->url);
+                $absoluteLink = $this->resolveUrl($href, rtrim($site->url, '/') . '/');
                 if (!$absoluteLink) return;
 
                 $linkHost = parse_url($absoluteLink, PHP_URL_HOST);
@@ -290,9 +295,8 @@ class CrawlService
                 // Vérifier les règles include_pages si définies
                 if (!empty($site->include_pages)) {
                     $allowed = false;
-                    foreach ($site->include_pages as $allowedPath) {
-                        $parsedPath = parse_url($normalizedLink, PHP_URL_PATH) ?? '';
-                        if (str_starts_with($parsedPath . '/', $allowedPath . '/')) {
+                    foreach ($site->include_pages as $pattern) {
+                        if ($this->urlMatchesPattern($normalizedLink, $pattern)) {
                             $allowed = true;
                             break;
                         }
@@ -300,9 +304,10 @@ class CrawlService
                     if (!$allowed) return;
                 }
 
+
                 // Vérifier les règles exclude_pages
                 foreach ($site->exclude_pages ?? [] as $pattern) {
-                    if (str_contains($normalizedLink, $pattern)) return;
+                    if ($this->urlMatchesPattern($normalizedLink, $pattern)) return;
                 }
 
                 // Ajouter le lien si pas déjà présent
@@ -319,5 +324,23 @@ class CrawlService
 
         return $links;
     }
+
+    private function urlMatchesPattern(string $url, string $pattern): bool
+    {
+        // Normaliser
+        $url = rtrim($url, '/');
+        $pattern = rtrim($pattern, '/');
+
+        // Si pattern contient *
+        if (str_contains($pattern, '*')) {
+            $escaped = preg_quote($pattern, '#');
+            $regex = '#^' . str_replace('\*', '.*', $escaped) . '$#i';
+            return (bool) preg_match($regex, $url);
+        }
+
+        // Sinon comparaison simple (compatibilité actuelle)
+        return $url === $pattern || str_starts_with($url . '/', $pattern . '/');
+    }
+
 
 }
