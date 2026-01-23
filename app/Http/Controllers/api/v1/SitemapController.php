@@ -44,7 +44,7 @@ class SitemapController extends Controller
 
     private function authorizeSite(Site $site)
     {
-        if ($site->account_id !== auth()->user()->account_id) {
+        if ($site->account_id !== auth()->user()->ownedAccount->id) {
             abort(403);
         }
     }

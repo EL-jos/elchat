@@ -4,6 +4,8 @@ namespace App\Http\Controllers\api\v1;
 
 use App\Mail\ResetPasswordCodeMail;
 use App\Models\Account;
+use App\Models\Role;
+use App\Models\Site;
 use OpenApi\Annotations as OA;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\RegisterRequest;
@@ -74,22 +76,47 @@ class AuthController extends Controller
 
         try {
             DB::transaction(function () use (&$payload, &$user, &$code){
+                $role = null;
+                if($payload['is_admin']){
+                    $role = Role::where('name', 'admin')->first();
+                }else{
+                    $role = Role::where('name', 'visitor')->first();
+                }
 
-                // Créer un compte associé à l'utilisateur
-                $account = Account::create([
-                    'name' => Str::title($payload['firstname']). ' '. Str::upper($payload['lastname']) . "'s Account",
-                    'email' => $payload['email']
-                ]);
-
+                /**
+                 * @var User $user
+                 */
                 // 1️⃣ Create user
                 $user = User::create([
+                    'role_id' => $role->id,
                     'firstname' => $payload['firstname'],
                     'lastname' => $payload['lastname'],
-                    'account_id'  => $account->id,
                     'email'     => $payload['email'],
                     'password'  => Hash::make($payload['password']),
                     'is_verified' => false,
                 ]);
+
+                if($user->isAdmin()  && !$user->ownedAccount){
+                    // Créer un compte associé à l'utilisateur
+                    $account = Account::create([
+                        'name' => $payload['account_name'],
+                        'email' => $payload['email'],
+                        'owner_user_id' => $user->id,
+                    ]);
+                }
+
+                if ($user->isVisitor()) {
+                    $site = Site::findOrFail($payload['site_id']);
+
+                    $site->users()->syncWithoutDetaching([
+                        $user->id => [
+                            'first_seen_at' => now(),
+                            'last_seen_at' => now(),
+                        ]
+                    ]);
+                }
+
+
 
 
                 // 3️⃣ Create verification code
@@ -463,6 +490,7 @@ class AuthController extends Controller
             [],
             ['logged_in_at' => now()]
         );
+
 
         return response()->json([
             'token' => $token,

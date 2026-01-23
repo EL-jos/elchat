@@ -5,7 +5,9 @@ namespace App\Models;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Str;
@@ -49,9 +51,23 @@ class User extends Authenticatable implements JWTSubject
             $model->id = (string) Str::uuid();
         });
     }
-    public function account(): BelongsTo
+    // 🔐 ROLE
+    public function role(): BelongsTo
     {
-        return $this->belongsTo(Account::class);
+        return $this->belongsTo(Role::class);
+    }
+
+    // 🧑‍💼 ACCOUNT (uniquement si admin)
+    public function ownedAccount(): HasOne
+    {
+        return $this->hasOne(Account::class, 'owner_user_id');
+    }
+
+    // 🌐 SITES (visiteur)
+    public function sites(): BelongsToMany
+    {
+        return $this->belongsToMany(Site::class)
+            ->withPivot(['first_seen_at', 'last_seen_at']);
     }
     public function conversations(): HasMany
     {
@@ -76,6 +92,19 @@ class User extends Authenticatable implements JWTSubject
     public function getJWTCustomClaims()
     {
         // TODO: Implement getJWTCustomClaims() method.
-        return [];
+        return [
+            'role' => $this->role?->name ?? 'unknown',
+        ];
     }
+
+    public function isAdmin(): bool
+    {
+        return $this->role?->name === 'admin';
+    }
+
+    public function isVisitor(): bool
+    {
+        return $this->role?->name === 'visitor';
+    }
+
 }

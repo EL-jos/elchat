@@ -7,12 +7,15 @@ use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\Site;
 use App\Services\ChatService;
+use App\Services\MercureService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class ChatController extends Controller
 {
-    public function ask(Request $request, ChatService $chatService)
+    public function ask(Request $request, ChatService $chatService, MercureService $mercure)
     {
+
         $data = $request->validate([
             'site_id' => 'required|exists:sites,id',
             'question' => 'required|string|max:1000',
@@ -20,7 +23,7 @@ class ChatController extends Controller
         ]);
 
         $site = Site::where('id', $data['site_id'])
-            ->where('account_id', auth()->user()->account_id)
+            ->where('account_id', auth()->user()->ownedAccount->id)
             ->firstOrFail();
 
         // 🔑 Continuité OU nouvelle conversation
@@ -37,11 +40,22 @@ class ChatController extends Controller
 
         // Sauvegarder la question
         Message::create([
+            'id' => (string) Str::uuid(),
             'conversation_id' => $conversation->id,
             'user_id' => auth()->id(),
             'role' => 'user',
             'content' => $data['question'],
         ]);
+
+        $topic = "/sites/{$site->id}/conversations/{$conversation->id}";
+
+        $mercure->post($topic, [
+            'type' => 'user_message',
+            'conversation_id' => $conversation->id,
+            'content' => $data['question'],
+            'created_at' => now()->toISOString(),
+        ]);
+
 
         // Générer la réponse (🧠 avec mémoire)
         $answer = $chatService->answer(
@@ -52,11 +66,20 @@ class ChatController extends Controller
 
         // Sauvegarder la réponse
         Message::create([
+            'id' => (string) Str::uuid(),
             'conversation_id' => $conversation->id,
             'user_id' => auth()->id(),
             'role' => 'bot',
             'content' => $answer,
         ]);
+
+        $mercure->post($topic, [
+            'type' => 'bot_message',
+            'conversation_id' => $conversation->id,
+            'content' => $answer,
+            'created_at' => now()->toISOString(),
+        ]);
+
 
         return response()->json([
             'answer' => $answer,

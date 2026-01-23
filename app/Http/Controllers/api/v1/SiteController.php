@@ -37,7 +37,7 @@ class SiteController extends Controller
      */
     public function index()
     {
-        $accountId = auth()->user()->account_id;
+        $accountId = auth()->user()->ownedAccount->id;
         $sites = Site::where('account_id', $accountId)->get();
         return response()->json($sites);
     }
@@ -58,7 +58,7 @@ class SiteController extends Controller
         ]);
 
         $site = Site::create([
-            'account_id' => auth()->user()->account_id,
+            'account_id' => auth()->user()->ownedAccount->id,
             'type_site_id' => $validated['type_site_id'],
             'company_name' => $validated['company_name'] ?? null,
             'url' => $validated['url'],
@@ -77,7 +77,7 @@ class SiteController extends Controller
     public function show($id)
     {
         $site = Site::where('id', $id)
-            ->where('account_id', auth()->user()->account_id)
+            ->where('account_id', auth()->user()->ownedAccount->id)
             ->firstOrFail();
         return response()->json($site);
     }
@@ -87,7 +87,7 @@ class SiteController extends Controller
     public function update(Request $request, $id)
     {
         $site = Site::where('id', $id)
-            ->where('account_id', auth()->user()->account_id)
+            ->where('account_id', auth()->user()->ownedAccount->id)
             ->firstOrFail();
 
         $validated = $request->validate([
@@ -103,7 +103,7 @@ class SiteController extends Controller
         ]);
 
         $site->update([
-            'account_id' => auth()->user()->account_id,
+            'account_id' => auth()->user()->ownedAccount->id,
             'type_site_id' => $validated['type_site_id'],
             'company_name' => $validated['company_name'],
             'url' => $validated['url'],
@@ -120,7 +120,7 @@ class SiteController extends Controller
     public function destroy($id)
     {
         $site = Site::where('id', $id)
-            ->where('account_id', auth()->user()->account_id)
+            ->where('account_id', auth()->user()->ownedAccount->id)
             ->firstOrFail();
 
         $site->delete();
@@ -132,7 +132,7 @@ class SiteController extends Controller
     public function crawl($id)
     {
         $site = Site::where('id', $id)
-            ->where('account_id', auth()->user()->account_id)
+            ->where('account_id', auth()->user()->ownedAccount->id)
             ->firstOrFail();
 
         // Dispatch le Job en arrière-plan

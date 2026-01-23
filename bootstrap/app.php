@@ -18,7 +18,6 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'verified' => EnsureUserIsVerified::class,
             'jwt.auth' => JwtAuthenticate::class,
-            'attempt.token' => EnsureAttemptToken::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

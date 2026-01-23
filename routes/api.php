@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\api\v1\ChatController;
+use App\Http\Controllers\api\v1\ConversationController;
+use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\api\v1\DocumentController;
 use App\Http\Controllers\api\v1\ManualContentController;
 use App\Http\Controllers\api\v1\SitemapController;
@@ -25,12 +27,17 @@ Route::prefix('v1')->group(function () {
 
 
     Route::middleware('jwt.auth')->group(function () {
+        Route::controller(DashboardController::class)->group(function () {
+            Route::get('/dashboard/overview', 'overview');
+            Route::get('/dashboard/site/{id}', 'siteOverview');
+        });
         Route::apiResource('site', SiteController::class);
         Route::controller(SiteController::class)->group(function () {
             Route::post('site/{id}/crawl', 'crawl');
             Route::post('site/{site_id}/documents', 'uploadDocument');
         });
         Route::post('/chat/ask', [ChatController::class, 'ask']);
+        Route::apiResource('conversation', ConversationController::class)->except(['store', 'update', 'destroy']);
         Route::post('/site/{site}/manual-content', [ManualContentController::class, 'store']);
         Route::post('/site/{site}/sitemap', [SitemapController::class, 'store']);
         Route::post('/site/{site}/document', [DocumentController::class, 'store']);

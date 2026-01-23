@@ -64,7 +64,7 @@ class ChatService
         $history = Message::where('conversation_id', $conversation->id)
             ->orderBy('created_at', 'desc')
             ->skip(1)
-            ->take(6)
+            ->take(10)
             ->get()
             ->reverse()
             ->map(function ($m) {

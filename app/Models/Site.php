@@ -35,8 +35,11 @@ class Site extends BaseModel
     public function type(): BelongsTo{
         return $this->belongsTo(TypeSite::class);
     }
-
     public function documents(){
         return $this->morphMany(Document::class, 'documentable');
+    }
+    public function users(){
+        return $this->belongsToMany(User::class)
+            ->withPivot(['first_seen_at', 'last_seen_at']);
     }
 }
