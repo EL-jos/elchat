@@ -33,7 +33,7 @@ class Site extends BaseModel
         return $this->hasMany(UnansweredQuestion::class);
     }
     public function type(): BelongsTo{
-        return $this->belongsTo(TypeSite::class);
+        return $this->belongsTo(TypeSite::class, 'type_site_id');
     }
     public function documents(){
         return $this->morphMany(Document::class, 'documentable');

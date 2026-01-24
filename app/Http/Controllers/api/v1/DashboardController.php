@@ -25,8 +25,10 @@ class DashboardController extends Controller
             return response()->json(['error' => 'No owned account'], 404);
         }
 
-        $sites = Site::where('account_id', $account->id)->get();
+        $sites = Site::where('account_id', $account->id)->with('type')->get();
         $siteIds = $sites->pluck('id');
+
+        //dd($sites->);
 
         // =====================
         // 🔢 TOTAUX GLOBAUX
@@ -124,16 +126,18 @@ class DashboardController extends Controller
         }
 
         // 🔹 Liste des sites (type_site, name, url, status)
-        //$sites->first()->load('type');
-        //dd($sites->first()->type);
-        $sites_list = $sites->map(fn ($site) => [
-            //'type_site' => $site->type?->name ?? null,
-            'icon' => $site->url . '/favicon.ico',
+
+        /*$sites_list = $sites->map(fn ($site) => [
+            'id' => $site->id,
+            'type_site' => $site->type,
+            'favicon' => $site->favicon,
             'name' => $site->name,
             'url' => $site->url,
             'status' => $site->status,
             'created_at' => Carbon::parse($site->created_at)->format('Y-m-d'),
-        ]);
+            'exclude_pages' => $site->exclude_pages,
+            'include_pages' => $site->include_pages,
+        ]);*/
 
 
         return response()->json([
@@ -142,7 +146,7 @@ class DashboardController extends Controller
             'total_conversations' => $total_conversations,
             'total_messages' => $total_messages,
             'total_users' => $total_users,
-            'sites' => $sites_list,
+            'sites' => $sites,
             'conversations_per_day' => $conversations_per_day,
             'messages_per_day' => $messages_per_day,
             'source_distribution' => $source_distribution,
@@ -243,5 +247,53 @@ class DashboardController extends Controller
             'source_distribution' => $source_distribution,
         ]);
     }
+
+    private function getGoogleFaviconSecure(
+        string $url,
+        int $size = 64,
+        bool $removeWww = true
+    ): ?string {
+
+        // Tailles autorisées par Google
+        $allowedSizes = [16, 32, 48, 64, 128, 256];
+
+        if (!in_array($size, $allowedSizes, true)) {
+            $size = 64; // fallback sécurisé
+        }
+
+        // Nettoyage de l'URL
+        $url = trim($url);
+
+        // Ajouter un schéma si absent (obligatoire pour parse_url)
+        if (!preg_match('~^https?://~i', $url)) {
+            $url = 'https://' . $url;
+        }
+
+        $parts = parse_url($url);
+
+        if (empty($parts['host'])) {
+            return null;
+        }
+
+        $domain = strtolower($parts['host']);
+
+        // Supprimer www. si demandé
+        if ($removeWww) {
+            $domain = preg_replace('/^www\./i', '', $domain);
+        }
+
+        // Validation stricte du domaine
+        if (!filter_var($domain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
+            return null;
+        }
+
+        // Construction de l'URL finale
+        return sprintf(
+            'https://www.google.com/s2/favicons?sz=%d&domain=%s',
+            $size,
+            $domain
+        );
+    }
+
 
 }

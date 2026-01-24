@@ -49,7 +49,7 @@ class SiteController extends Controller
         $validated = $request->validate([
             'url' => 'required|url',
             'type_site_id' => 'required|exists:type_sites,id',
-            'company_name' => 'nullable|string|max:255',
+            'name' => 'required|string|max:255',
             'crawl_depth' => 'nullable|integer|min:1|max:5',
             'exclude_pages' => 'nullable|array',
             'exclude_pages.*' => 'string',
@@ -60,16 +60,17 @@ class SiteController extends Controller
         $site = Site::create([
             'account_id' => auth()->user()->ownedAccount->id,
             'type_site_id' => $validated['type_site_id'],
-            'company_name' => $validated['company_name'] ?? null,
+            'name' => $validated['name'] ?? null,
             'url' => $validated['url'],
             'status' => 'pending',
             'crawl_depth' => $validated['crawl_depth'] ?? 1,
             'crawl_delay' => $validated['crawl_delay'] ?? 0,
             'exclude_pages' => $validated['exclude_pages'] ?? [],
             'include_pages' => $validated['include_pages'] ?? null,
+            'favicon' => $this->getGoogleFaviconSecure($validated['url']),
         ]);
 
-        return response()->json($site, 201);
+        return response()->json($site->load('type'), 201);
     }
     /**
      * Afficher un site spécifique
@@ -95,7 +96,7 @@ class SiteController extends Controller
             'crawl_depth' => 'nullable|integer|min:1|max:5',
             'status' => 'nullable|in:pending,crawling,ready,error',
             'type_site_id' => 'required|exists:type_sites,id',
-            'company_name' => 'nullable|string|max:255',
+            'name' => 'required|string|max:255',
             'exclude_pages' => 'nullable|array',
             'exclude_pages.*' => 'string',
             'include_pages' => 'nullable|array',
@@ -103,16 +104,17 @@ class SiteController extends Controller
         ]);
 
         $site->update([
-            'account_id' => auth()->user()->ownedAccount->id,
+            //'account_id' => auth()->user()->ownedAccount->id,
             'type_site_id' => $validated['type_site_id'],
-            'company_name' => $validated['company_name'],
+            'name' => $validated['name'],
             'url' => $validated['url'],
             'crawl_depth' => $validated['crawl_depth'] ?? 1,
             'crawl_delay' => $validated['crawl_delay'] ?? 0,
             'exclude_pages' => $validated['exclude_pages'] ?? [],
             'include_pages' => $validated['include_pages'] ?? null,
+            'favicon' => $this->getGoogleFaviconSecure($validated['url']),
         ]);
-        return response()->json($site);
+        return response()->json($site->load('type'));
     }
     /**
      * Supprimer un site
@@ -145,5 +147,52 @@ class SiteController extends Controller
             'message' => 'Crawl started in background',
             'site' => $site
         ]);
+    }
+
+    private function getGoogleFaviconSecure(
+        string $url,
+        int $size = 64,
+        bool $removeWww = true
+    ): ?string {
+
+        // Tailles autorisées par Google
+        $allowedSizes = [16, 32, 48, 64, 128, 256];
+
+        if (!in_array($size, $allowedSizes, true)) {
+            $size = 64; // fallback sécurisé
+        }
+
+        // Nettoyage de l'URL
+        $url = trim($url);
+
+        // Ajouter un schéma si absent (obligatoire pour parse_url)
+        if (!preg_match('~^https?://~i', $url)) {
+            $url = 'https://' . $url;
+        }
+
+        $parts = parse_url($url);
+
+        if (empty($parts['host'])) {
+            return null;
+        }
+
+        $domain = strtolower($parts['host']);
+
+        // Supprimer www. si demandé
+        if ($removeWww) {
+            $domain = preg_replace('/^www\./i', '', $domain);
+        }
+
+        // Validation stricte du domaine
+        if (!filter_var($domain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
+            return null;
+        }
+
+        // Construction de l'URL finale
+        return sprintf(
+            'https://www.google.com/s2/favicons?sz=%d&domain=%s',
+            $size,
+            $domain
+        );
     }
 }

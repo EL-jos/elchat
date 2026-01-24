@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\api\v1\DocumentController;
 use App\Http\Controllers\api\v1\ManualContentController;
 use App\Http\Controllers\api\v1\SitemapController;
+use App\Http\Controllers\api\v1\TypeSiteController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\api\v1\SiteController;
 use App\Http\Controllers\api\v1\AuthController;
@@ -41,6 +42,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/site/{site}/manual-content', [ManualContentController::class, 'store']);
         Route::post('/site/{site}/sitemap', [SitemapController::class, 'store']);
         Route::post('/site/{site}/document', [DocumentController::class, 'store']);
+        Route::apiResource('type_site', TypeSiteController::class)->only(['index']);
     });
 });
 
