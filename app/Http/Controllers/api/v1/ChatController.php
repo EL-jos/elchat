@@ -9,6 +9,7 @@ use App\Models\Site;
 use App\Services\ChatService;
 use App\Services\MercureService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class ChatController extends Controller
@@ -46,6 +47,8 @@ class ChatController extends Controller
             'role' => 'user',
             'content' => $data['question'],
         ]);
+
+        Log::info("Avant mercure");
 
         $topic = "/sites/{$site->id}/conversations/{$conversation->id}";
 

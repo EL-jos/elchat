@@ -42,7 +42,7 @@ class RunMercureServer extends Command
             '$env:ADDR="localhost:3000"; ' .
             '$env:DEMO="0"; ' .
             '$env:ALLOW_ANONYMOUS="1"; ' .
-            '$env:CORS_ALLOWED_ORIGINS="http://localhost:4200"; ' .
+            '$env:CORS_ALLOWED_ORIGINS="*"; ' .
             '$env:PUBLISH_ALLOWED_ORIGINS="http://localhost:8000"; ' .
             '.\mercure.exe';
 

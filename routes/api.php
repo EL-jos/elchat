@@ -36,6 +36,8 @@ Route::prefix('v1')->group(function () {
         Route::controller(SiteController::class)->group(function () {
             Route::post('site/{id}/crawl', 'crawl');
             Route::post('site/{site_id}/documents', 'uploadDocument');
+            Route::get('site/{siteId}/pages/overview', 'pagesOverview');
+            Route::get('site/{site}/widget-test', 'widgetTest');
         });
         Route::post('/chat/ask', [ChatController::class, 'ask']);
         Route::apiResource('conversation', ConversationController::class)->except(['store', 'update', 'destroy']);

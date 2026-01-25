@@ -58,13 +58,13 @@ class ChatService
     /**
      * Réponse commerciale incarnée (mode production)
      */
-    public function answer(Site $site, string $question, Conversation $conversation): string
+    /*public function answer(Site $site, string $question, Conversation $conversation): string
     {
 
         $history = Message::where('conversation_id', $conversation->id)
             ->orderBy('created_at', 'desc')
             ->skip(1)
-            ->take(10)
+            ->take(6)
             ->get()
             ->reverse()
             ->map(function ($m) {
@@ -108,6 +108,101 @@ class ChatService
                 ];
             }
         }
+
+        // 3️⃣ Construire le contexte
+
+        $minRequiredChunks = 1;
+        $minConfidenceScore = 0.30; //0.39 ou 0.45 sont bon aussi
+
+        $validChunks = array_filter($scored, fn ($c) =>
+            $c['score'] >= $minConfidenceScore
+        );
+
+        if (count($validChunks) < $minRequiredChunks) {
+            UnansweredQuestion::create([
+                'site_id' => $site->id,
+                'question' => $question,
+            ]);
+
+            // ⚠️ Fallback HUMAIN (clé de l’illusion)
+            //$context = "Nous n'avons pas communiqué publiquement cette information pour le moment.";
+            return "Je n’ai pas trouvé cette information dans les données de notre entreprise.
+                    N’hésitez pas à nous préciser votre besoin ou à nous contacter directement.";
+        } else {
+            usort($scored, fn ($a, $b) => $b['score'] <=> $a['score']);
+
+            $context = collect(array_slice($scored, 0, 3))
+                ->pluck('text')
+                ->implode("\n\n---\n\n");
+        }
+
+        $isSelectionQuestion = preg_match('/moins cher|meilleur|choisir|recommander|quel/i', $question);
+        if ($isSelectionQuestion && empty($validChunks)) {
+            //$context = "Nous proposons plusieurs produits, mais nous ne communiquons pas de classement par prix.";
+            return "Je peux vous expliquer nos offres si vous me précisez votre besoin.";
+        }
+
+        if (trim($context) === '') {
+            return "Je n’ai pas d’information fiable à ce sujet pour le moment.";
+        }
+
+
+        // Appel à la nouvelle version de callLLM avec retry
+        return $this->callLLM($site, $question, $context, $history);
+    }*/
+    public function answer(Site $site, string $question, Conversation $conversation): string
+    {
+
+        $history = Message::where('conversation_id', $conversation->id)
+            ->orderBy('created_at', 'desc')
+            ->skip(1)
+            ->take(6)
+            ->get()
+            ->reverse()
+            ->map(function ($m) {
+                if ($m->role === 'bot') {
+                    return [
+                        'role' => 'assistant',
+                        'content' => '[Réponse précédente donnée au client]',
+                    ];
+                }
+
+                return [
+                    'role' => 'user',
+                    'content' => $m->content,
+                ];
+            })
+            ->toArray();
+
+        // 1️⃣ Embedding de la question
+        $questionEmbedding = $this->embeddingService->getEmbedding($question);
+
+        // 2️⃣ Charger les chunks du site
+        $scored = [];
+
+        Chunk::where('site_id', $site->id)
+            ->whereIn('source_type', ['woocommerce','page','document','sitemap'])
+            ->select(['text', 'embedding'])
+            ->chunk(500, function ($chunks) use (&$scored, $questionEmbedding) {
+
+                foreach ($chunks as $chunk) {
+                    $score = $this->similarityService->cosine(
+                        $questionEmbedding,
+                        $chunk->embedding
+                    );
+
+                    if ($score >= 0.30) {
+                        $scored[] = [
+                            'text' => $chunk->text,
+                            'score' => $score,
+                        ];
+                    }
+
+                    if (count($scored) >= 20) {
+                        return false; // stop chunk()
+                    }
+                }
+            });
 
         // 3️⃣ Construire le contexte
 

@@ -16,6 +16,7 @@ use App\Services\IndexService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\FacadesLog;
@@ -225,6 +226,198 @@ class SiteController extends Controller
         $chunks = $chunksQuery->paginate($perPage, ['*'], 'page', $page);
 
         return response()->json($chunks);
+    }
+
+    public function pagesOverview(string $siteId)
+    {
+        /** @var Site $site */
+        $site = Site::where('id', $siteId)
+            ->where('account_id', auth()->user()->ownedAccount->id)
+            ->firstOrFail();
+
+        /**
+         * 📊 STATS
+         */
+        $totalPages = Page::where('site_id', $site->id)->count();
+
+        $indexedPages = Page::where('site_id', $site->id)
+            ->where('is_indexed', true)
+            ->count();
+
+        $errorPages = Page::where('site_id', $site->id)
+            ->whereHas('crawlJob', function ($q) {
+                $q->where('status', 'error');
+            })
+            ->count();
+
+        $excludedPages = Page::where('site_id', $site->id)
+            ->where('is_indexed', false)
+            ->whereDoesntHave('crawlJob', function ($q) {
+                $q->where('status', 'error');
+            })
+            ->count();
+
+        $totalChunks = Chunk::where('site_id', $site->id)->count();
+
+        /**
+         * 📄 PAGES LIST
+         */
+        $pages = Page::where('site_id', $site->id)
+            ->with([
+                'crawlJob:id,status,error_message,created_at'
+            ])
+            ->withCount('chunks')
+            ->orderByDesc('updated_at')
+            ->get()
+            ->map(function (Page $page) {
+                return [
+                    'id' => $page->id,
+                    'site_id' => $page->site_id,
+                    'url' => $page->url,
+                    'title' => $page->title,
+                    'source' => $page->source, // crawl | sitemap
+                    'is_indexed' => $page->is_indexed,
+                    'chunks_count' => $page->chunks_count,
+                    'last_crawl' => $page->crawlJob ? [
+                        'id' => $page->crawlJob->id,
+                        'status' => $page->crawlJob->status,
+                        'error_message' => $page->crawlJob->error_message,
+                        'created_at' => $page->crawlJob->created_at?->toISOString(),
+                    ] : null,
+                    'created_at' => $page->created_at->toISOString(),
+                    'updated_at' => $page->updated_at->toISOString(),
+                ];
+            });
+
+        /**
+         * ✅ RESPONSE
+         */
+        return response()->json([
+            'site' => [
+                'id' => $site->id,
+                'name' => $site->name,
+                'url' => $site->url,
+                'status' => $site->status,
+                'favicon' => $site->favicon
+            ],
+            'stats' => [
+                'total_pages' => $totalPages,
+                'indexed_pages' => $indexedPages,
+                'excluded_pages' => $excludedPages,
+                'error_pages' => $errorPages,
+                'total_chunks' => $totalChunks,
+            ],
+            'pages' => $pages,
+        ]);
+    }
+
+    /*public function widgetTest(Request $request, string $siteId)
+    {
+        $site = Site::findOrFail($siteId);
+        $user = $request->user();
+
+        // 🔐 Vérification que l'utilisateur est bien propriétaire du site
+        abort_if($site->account_id !== $user->ownedAccount->id, 403);
+
+        // 🔹 URL à tester
+        //$url = rtrim($site->url, '/') . '/'; // s'assure que la racine est correcte
+        $url = "http://127.0.0.1:5500/index.html";
+
+        // 🔹 Tag attendu (adaptable si plusieurs types)
+        $widgetTagPattern = sprintf(
+            '/<script\s+async\s+src="https:\/\/www\.domain\.com\/elchat\/js\?id=%s"><\/script>/',
+            preg_quote($site->id, '/')
+        );
+
+        try {
+            // -------------------------
+            // 🔹 Requête HTTP vers la page du site
+            // -------------------------
+            $response = Http::timeout(5)
+                ->followRedirects()
+                ->get($url);
+
+            $body = $response->body();
+
+            // -------------------------
+            // 🔹 Vérification du tag ELChat
+            // -------------------------
+            if (preg_match($widgetTagPattern, $body)) {
+                $status = 'ok';
+                $message = 'Le widget ELChat est détecté et semble fonctionnel';
+                $detected_tag = true;
+            } else {
+                $status = 'error';
+                $message = 'Le widget ELChat n\'est pas trouvé sur la page';
+                $detected_tag = false;
+            }
+
+        } catch (\Exception $e) {
+            $status = 'error';
+            $message = 'Impossible d\'atteindre le site ou de tester le widget: ' . $e->getMessage();
+            $detected_tag = false;
+        }
+
+        // -------------------------
+        // 🔹 Réponse structurée
+        // -------------------------
+        return response()->json([
+            'site_id' => $site->id,
+            'site_url' => $site->url,
+            'status' => $status,
+            'message' => $message,
+            'detected_tag' => $detected_tag,
+            'tested_at' => now()->toISOString(),
+            'widget_expected_src' => "https://www.domain.com/elchat/js?id={$site->id}",
+        ]);
+    }*/
+    public function widgetTest(Request $request, string $siteId)
+    {
+        $site = Site::findOrFail($siteId);
+        $user = $request->user();
+
+        abort_if($site->account_id !== $user->ownedAccount->id, 403);
+
+        // 🔹 URL à tester
+        // Test local ou prod
+        $url = "http://127.0.0.1:5500"; // pour le test local
+        // $url = rtrim($site->url, '/') . '/'; // pour prod
+
+        // 🔹 Tag attendu
+        $widgetTagPattern = sprintf(
+            '/<script\s+async\s+src="https:\/\/www\.domain\.com\/elchat\/js\?id=%s"><\/script>/',
+            preg_quote($site->id, '/')
+        );
+
+        try {
+            $response = Http::timeout(5)->get($url); // plus de followRedirects
+            $body = $response->body();
+
+            if (preg_match($widgetTagPattern, $body)) {
+                $status = 'ok';
+                $message = 'Le widget ELChat est détecté et semble fonctionnel';
+                $detected_tag = true;
+            } else {
+                $status = 'error';
+                $message = 'Le widget ELChat n\'est pas trouvé sur la page';
+                $detected_tag = false;
+            }
+
+        } catch (\Exception $e) {
+            $status = 'error';
+            $message = 'Impossible d\'atteindre le site ou de tester le widget: ' . $e->getMessage();
+            $detected_tag = false;
+        }
+
+        return response()->json([
+            'site_id' => $site->id,
+            'site_url' => $site->url,
+            'status' => $status,
+            'message' => $message,
+            'detected_tag' => $detected_tag,
+            'tested_at' => now()->toISOString(),
+            'widget_expected_src' => "https://www.domain.com/elchat/js?id={$site->id}",
+        ]);
     }
 
 }
