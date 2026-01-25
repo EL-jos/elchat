@@ -24,8 +24,10 @@ class DatabaseSeeder extends Seeder
             'email' => 'test@example.com',
         ]);*/
 
-        Role::create(['id' => (string) Str::uuid(), 'name' => 'admin']);
-        Role::create(['id' => (string) Str::uuid(), 'name' => 'visitor']);
-
+        //Role::create(['id' => (string) Str::uuid(), 'name' => 'admin']);
+        //Role::create(['id' => (string) Str::uuid(), 'name' => 'visitor']);
+        $this->call([
+            UserSeed::class,
+        ]);
     }
 }

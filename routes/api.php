@@ -30,7 +30,7 @@ Route::prefix('v1')->group(function () {
     Route::middleware('jwt.auth')->group(function () {
         Route::controller(DashboardController::class)->group(function () {
             Route::get('/dashboard/overview', 'overview');
-            Route::get('/dashboard/site/{id}', 'siteOverview');
+            Route::get('/dashboard/site/{id}/overview', 'siteOverview');
         });
         Route::apiResource('site', SiteController::class);
         Route::controller(SiteController::class)->group(function () {

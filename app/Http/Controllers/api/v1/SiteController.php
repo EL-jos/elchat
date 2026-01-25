@@ -4,14 +4,18 @@ namespace App\Http\Controllers\api\v1;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\CrawlSiteJob;
+use App\Models\Chunk;
+use App\Models\Conversation;
 use App\Models\CrawlJob;
 use App\Models\Document;
+use App\Models\Message;
 use App\Models\Page;
 use App\Models\Site;
 use App\Services\CrawlService;
 use App\Services\IndexService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\FacadesLog;
@@ -195,4 +199,32 @@ class SiteController extends Controller
             $domain
         );
     }
+
+    public function siteChunks(Request $request, string $siteId)
+    {
+        $site = Site::findOrFail($siteId);
+        $user = auth()->user();
+        $account = $user->ownedAccount;
+
+        abort_if($site->account_id !== $account->id, 403);
+
+        $perPage = $request->query('per_page', 20); // par défaut 20
+        $page = $request->query('page', 1);
+
+        $documentIds = Document::where('documentable_id', $site->id)
+            ->where('documentable_type', Site::class)
+            ->pluck('id');
+
+        $pageIds = Page::where('site_id', $site->id)->pluck('id');
+
+        $chunksQuery = Chunk::where(function ($q) use ($documentIds, $pageIds) {
+            $q->whereIn('document_id', $documentIds)
+                ->orWhereIn('page_id', $pageIds);
+        });
+
+        $chunks = $chunksQuery->paginate($perPage, ['*'], 'page', $page);
+
+        return response()->json($chunks);
+    }
+
 }

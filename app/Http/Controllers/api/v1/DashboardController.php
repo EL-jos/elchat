@@ -63,7 +63,6 @@ class DashboardController extends Controller
         $source_distribution = [];
 
         foreach ($sites as $site) {
-
             // =====================
             // 💬 CONVERSATIONS / SITE
             // =====================
@@ -98,47 +97,39 @@ class DashboardController extends Controller
             ];
 
             // =====================
-            // 📦 SOURCE DISTRIBUTION (CORRECTE)
+            // 📦 SOURCE DISTRIBUTION (SQL COUNT)
             // =====================
-
-            // Documents liés au site
             $siteDocumentIds = Document::where('documentable_id', $site->id)
                 ->where('documentable_type', Site::class)
                 ->pluck('id');
 
-            // Pages du site (pour crawl + sitemap)
             $pageIds = Page::where('site_id', $site->id)->pluck('id');
 
-            $chunks = Chunk::where(function ($q) use ($siteDocumentIds, $pageIds) {
-                $q->whereIn('document_id', $siteDocumentIds)
-                    ->orWhereIn('page_id', $pageIds);
-            })->get();
+            // Calcul des totaux par source directement en SQL
+            $bySource = [
+                'crawl' => Chunk::where(function($q) use ($siteDocumentIds, $pageIds){
+                    $q->whereIn('document_id', $siteDocumentIds)
+                        ->orWhereIn('page_id', $pageIds);
+                })->where('source_type', 'crawl')->count(),
+                'woocommerce' => Chunk::where(function($q) use ($siteDocumentIds, $pageIds){
+                    $q->whereIn('document_id', $siteDocumentIds)
+                        ->orWhereIn('page_id', $pageIds);
+                })->where('source_type', 'woocommerce')->count(),
+                'manuel' => Chunk::where(function($q) use ($siteDocumentIds, $pageIds){
+                    $q->whereIn('document_id', $siteDocumentIds)
+                        ->orWhereIn('page_id', $pageIds);
+                })->where('source_type', 'manuel')->count(),
+                'sitemap' => Chunk::where(function($q) use ($siteDocumentIds, $pageIds){
+                    $q->whereIn('document_id', $siteDocumentIds)
+                        ->orWhereIn('page_id', $pageIds);
+                })->where('source_type', 'sitemap')->count(),
+            ];
 
             $source_distribution[] = [
                 'site_name' => $site->name,
-                'sources' => [
-                    'crawl'       => $chunks->where('source_type', 'crawl')->count(),
-                    'woocommerce' => $chunks->where('source_type', 'woocommerce')->count(),
-                    'manuel'      => $chunks->where('source_type', 'manuel')->count(),
-                    'sitemap'     => $chunks->where('source_type', 'sitemap')->count(),
-                ]
+                'sources' => $bySource
             ];
         }
-
-        // 🔹 Liste des sites (type_site, name, url, status)
-
-        /*$sites_list = $sites->map(fn ($site) => [
-            'id' => $site->id,
-            'type_site' => $site->type,
-            'favicon' => $site->favicon,
-            'name' => $site->name,
-            'url' => $site->url,
-            'status' => $site->status,
-            'created_at' => Carbon::parse($site->created_at)->format('Y-m-d'),
-            'exclude_pages' => $site->exclude_pages,
-            'include_pages' => $site->include_pages,
-        ]);*/
-
 
         return response()->json([
             'total_sites' => $total_sites,
@@ -152,34 +143,74 @@ class DashboardController extends Controller
             'source_distribution' => $source_distribution,
         ]);
     }
-    public function siteOverview(Request $request, Site $site)
+    public function siteOverview(Request $request, string $siteId)
     {
+        //$site = Site::findOrFail($id);
         $user = auth()->user();
         $account = $user->ownedAccount;
 
-        // 🔐 Sécurité
+        $site = Site::where('id', $siteId)
+            ->where('account_id', auth()->user()->ownedAccount->id)
+            ->with(['type', 'account', 'users'])
+            ->firstOrFail();
+
         abort_if($site->account_id !== $account->id, 403);
 
-        $endDate = Carbon::now();
-        $startDate = Carbon::now()->subDays(6);
+        $endDate = \Carbon\Carbon::now();
+        $startDate = \Illuminate\Support\Carbon::now()->subDays(6);
 
-        // -------------------
-        // Documents & chunks
-        // -------------------
-
+        // ---------------------
+        // Documents
+        // ---------------------
         $documentIds = Document::where('documentable_id', $site->id)
             ->where('documentable_type', Site::class)
             ->pluck('id');
 
-        $chunks = Chunk::where(function ($query) use ($documentIds) {
-            $query->whereIn('document_id', $documentIds)
-                ->orWhereNull('document_id');
-        })->get();
+        // ---------------------
+        // Pages
+        // ---------------------
+        $pageIds = Page::where('site_id', $site->id)->pluck('id');
 
-        // -------------------
+        // ---------------------
+        // Chunks stats (SQL direct pour éviter la mémoire)
+        // ---------------------
+        $totalChunks = Chunk::where(function ($q) use ($documentIds, $pageIds) {
+            $q->whereIn('document_id', $documentIds)
+                ->orWhereIn('page_id', $pageIds);
+        })->count();
+
+        $bySource = [
+            'crawl'       => Chunk::where(function ($q) use ($documentIds, $pageIds) {
+                $q->whereIn('document_id', $documentIds)
+                    ->orWhereIn('page_id', $pageIds);
+            })->where('source_type', 'crawl')->count(),
+            'sitemap'     => Chunk::where(function ($q) use ($documentIds, $pageIds) {
+                $q->whereIn('document_id', $documentIds)
+                    ->orWhereIn('page_id', $pageIds);
+            })->where('source_type', 'sitemap')->count(),
+            'manuel'      => Chunk::where(function ($q) use ($documentIds, $pageIds) {
+                $q->whereIn('document_id', $documentIds)
+                    ->orWhereIn('page_id', $pageIds);
+            })->where('source_type', 'manuel')->count(),
+            'woocommerce' => Chunk::where(function ($q) use ($documentIds, $pageIds) {
+                $q->whereIn('document_id', $documentIds)
+                    ->orWhereIn('page_id', $pageIds);
+            })->where('source_type', 'woocommerce')->count(),
+        ];
+
+        // ---------------------
+        // Chunks items (20 derniers)
+        // ---------------------
+        /*$chunkItems = Chunk::where(function ($q) use ($documentIds, $pageIds) {
+            $q->whereIn('document_id', $documentIds)
+                ->orWhereIn('page_id', $pageIds);
+        })->orderBy('created_at', 'desc')
+            ->limit(20)
+            ->get();*/
+
+        // ---------------------
         // Conversations & messages
-        // -------------------
-
+        // ---------------------
         $conversations = Conversation::where('site_id', $site->id)
             ->whereBetween('created_at', [$startDate->startOfDay(), $endDate->endOfDay()])
             ->get();
@@ -190,64 +221,251 @@ class DashboardController extends Controller
             ->whereBetween('created_at', [$startDate->startOfDay(), $endDate->endOfDay()])
             ->get();
 
-        // -------------------
-        // Période (7 jours)
-        // -------------------
+        // ---------------------
+        // Users
+        // ---------------------
+        $total_users = DB::table('site_user')
+            ->where('site_id', $site->id)
+            ->distinct('user_id')
+            ->count('user_id');
 
+        // ---------------------
+        // Période 7 jours
+        // ---------------------
         $period = collect();
-        for ($date = $startDate->copy(); $date->lte($endDate); $date->addDay()) {
-            $period->push($date->format('Y-m-d'));
+        for ($d = $startDate->copy(); $d->lte($endDate); $d->addDay()) {
+            $period->push($d->format('Y-m-d'));
         }
 
-        // -------------------
-        // Groupement par jour
-        // -------------------
+        $conversations_per_day = $period->map(fn ($day) => [
+            'date' => $day,
+            'count' => $conversations
+                ->whereBetween('created_at', [$day.' 00:00:00', $day.' 23:59:59'])
+                ->count()
+        ]);
 
-        $conversations_per_day = $period->map(function ($day) use ($conversations) {
-            return [
-                'date' => $day,
-                'count' => $conversations
-                    ->whereBetween('created_at', [$day.' 00:00:00', $day.' 23:59:59'])
-                    ->count()
-            ];
-        });
+        $messages_per_day = $period->map(fn ($day) => [
+            'date' => $day,
+            'count' => $messages
+                ->whereBetween('created_at', [$day.' 00:00:00', $day.' 23:59:59'])
+                ->count()
+        ]);
 
-        $messages_per_day = $period->map(function ($day) use ($messages) {
-            return [
-                'date' => $day,
-                'count' => $messages
-                    ->whereBetween('created_at', [$day.' 00:00:00', $day.' 23:59:59'])
-                    ->count()
-            ];
-        });
+        $users = $site->users()
+            ->select([
+                'users.id',
+                'users.firstname',
+                'users.lastname',
+                'users.email',
+                'users.is_verified',
+            ])
+            ->get()
+            ->map(fn ($user) => [
+                'id' => $user->id,
+                'role_id' => $user->role_id,
+                'firstname' => $user->firstname,
+                'lastname' => $user->lastname,
+                'email' => $user->email,
+                'is_verified' => (bool) $user->is_verified,
+                'first_seen_at' => $user->pivot->first_seen_at,
+                'last_seen_at' => $user->pivot->last_seen_at,
+            ]);
 
-        // -------------------
-        // Source distribution
-        // -------------------
-
-        $source_distribution = [
-            'pages'       => $chunks->where('source_type', 'crawl')->count(),
-            'woocommerce' => $chunks->where('source_type', 'woocommerce')->count(),
-            'documents'   => $chunks->where('source_type', 'manuel')->count(),
+        // ---------------------
+        // Settings
+        // ---------------------
+        $settings = [
+            'language' => $site->language,
+            'crawl_depth' => $site->crawl_depth,
+            'crawl_delay' => $site->crawl_delay,
+            'include_pages' => $site->include_pages,
+            'exclude_pages' => $site->exclude_pages,
+            'system_prompt' => $site->system_prompt,
+            'updated_at' => $site->updated_at,
         ];
 
+        // ---------------------
+        // Response
+        // ---------------------
         return response()->json([
-            'site' => [
-                'id' => $site->id,
-                'name' => $site->name,
+            'site' => $site,
+
+            'kpis' => [
+                'documents' => $documentIds->count(),
+                'chunks' => $totalChunks,          // ✅ total chunks
+                'conversations' => $conversations->count(),
+                'messages' => $messages->count(),
+                'users' => $total_users,
+                "nb_pages" => $site->pages()->count(),
             ],
 
-            'total_documents' => $documentIds->count(),
-            'total_chunks' => $chunks->count(),
-            'total_conversations' => $conversations->count(),
-            'total_messages' => $messages->count(),
+            'activity' => [
+                'conversations_per_day' => $conversations_per_day,
+                'messages_per_day' => $messages_per_day,
+            ],
 
-            'conversations_per_day' => $conversations_per_day,
-            'messages_per_day' => $messages_per_day,
-            'source_distribution' => $source_distribution,
+            'sources' => [
+                'distribution' => $bySource,
+            ],
+
+            'chunks' => [
+                'total' => $totalChunks,           // ✅ total
+                'by_source' => $bySource,          // ✅ stats par source
+                //'items' => $chunkItems,            // ✅ seulement 20 derniers
+            ],
+
+            'users' => $users,
+
+            'settings' => $settings,
         ]);
-    }
+    }/*
+    {
+        $site = Site::findOrFail($siteId);
+        $user = auth()->user();
+        $account = $user->ownedAccount;
 
+        abort_if($site->account_id !== $account->id, 403);
+
+        $endDate = Carbon::now();
+        $startDate = Carbon::now()->subDays(6);
+
+        // ---------------------
+        // Documents
+        // ---------------------
+        $documentIds = Document::where('documentable_id', $site->id)
+            ->where('documentable_type', Site::class)
+            ->pluck('id');
+
+        // ---------------------
+        // Pages
+        // ---------------------
+        $pageIds = Page::where('site_id', $site->id)->pluck('id');
+
+        // ---------------------
+        // Chunks stats (SQL direct pour éviter la mémoire)
+        // ---------------------
+        $totalChunks = Chunk::where(function ($q) use ($documentIds, $pageIds) {
+            $q->whereIn('document_id', $documentIds)
+                ->orWhereIn('page_id', $pageIds);
+        })->count();
+
+        $bySource = [
+            'crawl'       => Chunk::where(function ($q) use ($documentIds, $pageIds) {
+                $q->whereIn('document_id', $documentIds)
+                    ->orWhereIn('page_id', $pageIds);
+            })->where('source_type', 'crawl')->count(),
+            'sitemap'     => Chunk::where(function ($q) use ($documentIds, $pageIds) {
+                $q->whereIn('document_id', $documentIds)
+                    ->orWhereIn('page_id', $pageIds);
+            })->where('source_type', 'sitemap')->count(),
+            'manuel'      => Chunk::where(function ($q) use ($documentIds, $pageIds) {
+                $q->whereIn('document_id', $documentIds)
+                    ->orWhereIn('page_id', $pageIds);
+            })->where('source_type', 'manuel')->count(),
+            'woocommerce' => Chunk::where(function ($q) use ($documentIds, $pageIds) {
+                $q->whereIn('document_id', $documentIds)
+                    ->orWhereIn('page_id', $pageIds);
+            })->where('source_type', 'woocommerce')->count(),
+        ];
+
+        // ---------------------
+        // Chunks items (20 derniers)
+        // ---------------------
+        $chunkItems = Chunk::where(function ($q) use ($documentIds, $pageIds) {
+            $q->whereIn('document_id', $documentIds)
+                ->orWhereIn('page_id', $pageIds);
+        })->orderBy('created_at', 'desc')
+            ->limit(20)
+            ->get();
+
+        // ---------------------
+        // Conversations & messages
+        // ---------------------
+        $conversations = Conversation::where('site_id', $site->id)
+            ->whereBetween('created_at', [$startDate->startOfDay(), $endDate->endOfDay()])
+            ->get();
+
+        $conversationIds = $conversations->pluck('id');
+
+        $messages = Message::whereIn('conversation_id', $conversationIds)
+            ->whereBetween('created_at', [$startDate->startOfDay(), $endDate->endOfDay()])
+            ->get();
+
+        // ---------------------
+        // Users
+        // ---------------------
+        $total_users = DB::table('site_user')
+            ->where('site_id', $site->id)
+            ->distinct('user_id')
+            ->count('user_id');
+
+        // ---------------------
+        // Période 7 jours
+        // ---------------------
+        $period = collect();
+        for ($d = $startDate->copy(); $d->lte($endDate); $d->addDay()) {
+            $period->push($d->format('Y-m-d'));
+        }
+
+        $conversations_per_day = $period->map(fn ($day) => [
+            'date' => $day,
+            'count' => $conversations
+                ->whereBetween('created_at', [$day.' 00:00:00', $day.' 23:59:59'])
+                ->count()
+        ]);
+
+        $messages_per_day = $period->map(fn ($day) => [
+            'date' => $day,
+            'count' => $messages
+                ->whereBetween('created_at', [$day.' 00:00:00', $day.' 23:59:59'])
+                ->count()
+        ]);
+
+        // ---------------------
+        // Settings
+        // ---------------------
+        $settings = [
+            'language' => $site->language,
+            'crawl_depth' => $site->crawl_depth,
+            'crawl_delay' => $site->crawl_delay,
+            'include_pages' => $site->include_pages,
+            'exclude_pages' => $site->exclude_pages,
+            'system_prompt' => $site->system_prompt,
+            'updated_at' => $site->updated_at,
+        ];
+
+        // ---------------------
+        // Response
+        // ---------------------
+        return response()->json([
+            'site' => $site->load('type'),
+
+            'kpis' => [
+                'documents' => $documentIds->count(),
+                'chunks' => $totalChunks,          // ✅ total chunks
+                'conversations' => $conversations->count(),
+                'messages' => $messages->count(),
+                'users' => $total_users,
+            ],
+
+            'activity' => [
+                'conversations_per_day' => $conversations_per_day,
+                'messages_per_day' => $messages_per_day,
+            ],
+
+            'sources' => [
+                'distribution' => $bySource,
+            ],
+
+            'chunks' => [
+                'total' => $totalChunks,           // ✅ total
+                'by_source' => $bySource,          // ✅ stats par source
+                'items' => $chunkItems,            // ✅ seulement 20 derniers
+            ],
+
+            'settings' => $settings,
+        ]);
+    }*/
     private function getGoogleFaviconSecure(
         string $url,
         int $size = 64,
