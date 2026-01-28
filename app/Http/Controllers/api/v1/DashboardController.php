@@ -143,6 +143,149 @@ class DashboardController extends Controller
             'source_distribution' => $source_distribution,
         ]);
     }
+    //Bonne version
+    /*public function overview(Request $request)
+    {
+        $endDate = Carbon::now()->endOfDay();
+        $startDate = Carbon::now()->subDays(6)->startOfDay();
+
+        $account = auth()->user()->ownedAccount;
+        if (!$account) {
+            return response()->json(['error' => 'No owned account'], 404);
+        }
+
+        $sites = Site::where('account_id', $account->id)
+            ->with('type')
+            ->get();
+
+        $siteIds = $sites->pluck('id');
+
+        // =====================
+        // 🔢 TOTAUX GLOBAUX
+        // =====================
+        $total_sites = $sites->count();
+
+        $total_documents = Document::whereIn('documentable_id', $siteIds)
+            ->where('documentable_type', Site::class)
+            ->count();
+
+        $conversationIds = Conversation::whereIn('site_id', $siteIds)->pluck('id');
+
+        $total_conversations = $conversationIds->count();
+        $total_messages = Message::whereIn('conversation_id', $conversationIds)->count();
+
+        $total_users = DB::table('site_user')
+            ->whereIn('site_id', $siteIds)
+            ->distinct()
+            ->count('user_id');
+
+        // =====================
+        // 📆 PÉRIODE (7 JOURS)
+        // =====================
+        $period = collect();
+        for ($d = $startDate->copy(); $d->lte($endDate); $d->addDay()) {
+            $period->push($d->copy());
+        }
+
+        $conversations_per_day = [];
+        $messages_per_day = [];
+        $source_distribution = [];
+
+        foreach ($sites as $site) {
+
+            // =====================
+            // 💬 CONVERSATIONS & MESSAGES (1 requête)
+            // =====================
+            $siteConversations = Conversation::where('site_id', $site->id)
+                ->whereBetween('created_at', [$startDate, $endDate])
+                ->get();
+
+            $siteConversationIds = $siteConversations->pluck('id');
+
+            $siteMessages = Message::whereIn('conversation_id', $siteConversationIds)
+                ->whereBetween('created_at', [$startDate, $endDate])
+                ->get();
+
+            // =====================
+            // 📊 CONVERSATIONS / JOUR (PHP)
+            // =====================
+            $conversations_per_day[] = [
+                'site_id'   => $site->id,
+                'site_name' => $site->name,
+                'data'      => $period->map(function ($day) use ($siteConversations) {
+                    return [
+                        'date'  => $day->format('Y-m-d'),
+                        'count' => $siteConversations->filter(function ($c) use ($day) {
+                            return $c->created_at->isSameDay($day);
+                        })->count(),
+                    ];
+                })->values(),
+            ];
+
+            // =====================
+            // 📊 MESSAGES / JOUR (PHP)
+            // =====================
+            $messages_per_day[] = [
+                'site_id'   => $site->id,
+                'site_name' => $site->name,
+                'data'      => $period->map(function ($day) use ($siteMessages) {
+                    return [
+                        'date'  => $day->format('Y-m-d'),
+                        'count' => $siteMessages->filter(function ($m) use ($day) {
+                            return $m->created_at->isSameDay($day);
+                        })->count(),
+                    ];
+                })->values(),
+            ];
+
+            // =====================
+            // 📦 SOURCE DISTRIBUTION
+            // =====================
+            $siteDocumentIds = Document::where('documentable_id', $site->id)
+                ->where('documentable_type', Site::class)
+                ->pluck('id');
+
+            $pageIds = Page::where('site_id', $site->id)->pluck('id');
+
+            $source_distribution[] = [
+                'site_id'   => $site->id,
+                'site_name' => $site->name,
+                'sources'   => [
+                    'crawl' => Chunk::where(function ($q) use ($siteDocumentIds, $pageIds) {
+                        $q->whereIn('document_id', $siteDocumentIds)
+                            ->orWhereIn('page_id', $pageIds);
+                    })->where('source_type', 'crawl')->count(),
+
+                    'woocommerce' => Chunk::where(function ($q) use ($siteDocumentIds, $pageIds) {
+                        $q->whereIn('document_id', $siteDocumentIds)
+                            ->orWhereIn('page_id', $pageIds);
+                    })->where('source_type', 'woocommerce')->count(),
+
+                    'manuel' => Chunk::where(function ($q) use ($siteDocumentIds, $pageIds) {
+                        $q->whereIn('document_id', $siteDocumentIds)
+                            ->orWhereIn('page_id', $pageIds);
+                    })->where('source_type', 'manuel')->count(),
+
+                    'sitemap' => Chunk::where(function ($q) use ($siteDocumentIds, $pageIds) {
+                        $q->whereIn('document_id', $siteDocumentIds)
+                            ->orWhereIn('page_id', $pageIds);
+                    })->where('source_type', 'sitemap')->count(),
+                ],
+            ];
+        }
+
+        return response()->json([
+            'total_sites'         => $total_sites,
+            'total_documents'     => $total_documents,
+            'total_conversations' => $total_conversations,
+            'total_messages'      => $total_messages,
+            'total_users'         => $total_users,
+            'sites'               => $sites,
+            'conversations_per_day' => $conversations_per_day,
+            'messages_per_day'      => $messages_per_day,
+            'source_distribution'   => $source_distribution,
+        ]);
+    }*/
     public function siteOverview(Request $request, string $siteId)
     {
         //$site = Site::findOrFail($id);
@@ -274,7 +417,7 @@ class DashboardController extends Controller
         // ---------------------
         // Settings
         // ---------------------
-        $settings = [
+        $settings_crawl = [
             'language' => $site->language,
             'crawl_depth' => $site->crawl_depth,
             'crawl_delay' => $site->crawl_delay,
@@ -283,6 +426,8 @@ class DashboardController extends Controller
             'system_prompt' => $site->system_prompt,
             'updated_at' => $site->updated_at,
         ];
+
+        $settings = $site->settings;
 
         // ---------------------
         // Response
@@ -315,6 +460,8 @@ class DashboardController extends Controller
             ],
 
             'users' => $users,
+
+            'settings_crawl' => $settings_crawl,
 
             'settings' => $settings,
         ]);

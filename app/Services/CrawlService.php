@@ -324,7 +324,6 @@ class CrawlService
 
         return $links;
     }
-
     private function urlMatchesPattern(string $url, string $pattern): bool
     {
         // Normaliser

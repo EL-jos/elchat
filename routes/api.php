@@ -7,6 +7,7 @@ use App\Http\Controllers\api\v1\DocumentController;
 use App\Http\Controllers\api\v1\ManualContentController;
 use App\Http\Controllers\api\v1\SitemapController;
 use App\Http\Controllers\api\v1\TypeSiteController;
+use App\Http\Controllers\api\v1\WidgetSettingController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\api\v1\SiteController;
 use App\Http\Controllers\api\v1\AuthController;
@@ -25,8 +26,6 @@ Route::prefix('v1')->group(function () {
         Route::post('/reset-password', 'resetPasswordWithCode')->name('api.reset-password-with-code');
         Route::get('/me', 'me')->name('api.me')->middleware('jwt.auth');
     });
-
-
     Route::middleware('jwt.auth')->group(function () {
         Route::controller(DashboardController::class)->group(function () {
             Route::get('/dashboard/overview', 'overview');
@@ -38,6 +37,7 @@ Route::prefix('v1')->group(function () {
             Route::post('site/{site_id}/documents', 'uploadDocument');
             Route::get('site/{siteId}/pages/overview', 'pagesOverview');
             Route::get('site/{site}/widget-test', 'widgetTest');
+            Route::get('/site/{site_id}/widget/config', 'widgetConfig');
         });
         Route::post('/chat/ask', [ChatController::class, 'ask']);
         Route::apiResource('conversation', ConversationController::class)->except(['store', 'update', 'destroy']);
@@ -45,6 +45,13 @@ Route::prefix('v1')->group(function () {
         Route::post('/site/{site}/sitemap', [SitemapController::class, 'store']);
         Route::post('/site/{site}/document', [DocumentController::class, 'store']);
         Route::apiResource('type_site', TypeSiteController::class)->only(['index']);
+        Route::apiResource('widget_setting', WidgetSettingController::class)->except(['index']);
+        Route::controller(WidgetSettingController::class)->group(function () {
+            Route::get('site/{site}/widget/setting', 'index');
+        });
+    });
+    Route::controller(SiteController::class)->group(function () {
+        Route::get('/site/{site_id}/widget/config', 'widgetConfig');
     });
 });
 

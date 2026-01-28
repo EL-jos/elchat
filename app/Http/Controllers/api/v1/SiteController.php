@@ -11,8 +11,10 @@ use App\Models\Document;
 use App\Models\Message;
 use App\Models\Page;
 use App\Models\Site;
+use App\Models\WidgetSetting;
 use App\Services\CrawlService;
 use App\Services\IndexService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -153,7 +155,6 @@ class SiteController extends Controller
             'site' => $site
         ]);
     }
-
     private function getGoogleFaviconSecure(
         string $url,
         int $size = 64,
@@ -200,7 +201,6 @@ class SiteController extends Controller
             $domain
         );
     }
-
     public function siteChunks(Request $request, string $siteId)
     {
         $site = Site::findOrFail($siteId);
@@ -227,7 +227,6 @@ class SiteController extends Controller
 
         return response()->json($chunks);
     }
-
     public function pagesOverview(string $siteId)
     {
         /** @var Site $site */
@@ -310,7 +309,6 @@ class SiteController extends Controller
             'pages' => $pages,
         ]);
     }
-
     /*public function widgetTest(Request $request, string $siteId)
     {
         $site = Site::findOrFail($siteId);
@@ -380,14 +378,19 @@ class SiteController extends Controller
 
         // 🔹 URL à tester
         // Test local ou prod
-        $url = "http://127.0.0.1:5500"; // pour le test local
+        $url = "http://127.0.0.1:5500/index.html"; // pour le test local
         // $url = rtrim($site->url, '/') . '/'; // pour prod
 
         // 🔹 Tag attendu
-        $widgetTagPattern = sprintf(
+        /*$widgetTagPattern = sprintf(
             '/<script\s+async\s+src="https:\/\/www\.domain\.com\/elchat\/js\?id=%s"><\/script>/',
             preg_quote($site->id, '/')
+        );*/
+        $widgetTagPattern = sprintf(
+            '/<script\b[^>]*\bsrc=["\']http:\/\/localhost:8000\/js\/widget\.js["\'][^>]*\bdata-site-id=["\']%s["\'][^>]*><\/script>/i',
+            preg_quote($site->id, '/')
         );
+
 
         try {
             $response = Http::timeout(5)->get($url); // plus de followRedirects
@@ -419,5 +422,138 @@ class SiteController extends Controller
             'widget_expected_src' => "https://www.domain.com/elchat/js?id={$site->id}",
         ]);
     }
+    /*public function widgetConfig(string $site_id): JsonResponse
+    {
+        $site = Site::query()
+            ->where('id', $site_id)
+            ->first();
 
+        if (!$site) {
+            return response()->json([
+                'success' => false,
+            ], 404);
+        }
+
+        $settings = WidgetSetting::query()
+            ->where('site_id', $site->id)
+            ->where('widget_enabled', true)
+            ->first();
+
+        if (!$settings) {
+            return response()->json([
+                'success' => false,
+            ], 403);
+        }
+
+        return response()->json([
+            'success' => true,
+            'config' => [
+
+                // =====================
+                // 🔘 Button
+                // =====================
+                'button' => [
+                    'text'       => $settings->button_text,
+                    'background' => $settings->button_background,
+                    'color'      => $settings->button_color,
+                    'position'   => $settings->button_position,
+                    'offsetX'    => $settings->button_offset_x,
+                    'offsetY'    => $settings->button_offset_y,
+                ],
+
+                // =====================
+                // 🎨 Theme
+                // =====================
+                'theme' => [
+                    'primary'    => $settings->theme_primary,
+                    'secondary'  => $settings->theme_secondary,
+                    'background' => $settings->theme_background,
+                    'color'      => $settings->theme_color,
+                ],
+
+                // =====================
+                // 💬 Texts & Messages
+                // =====================
+                'texts' => [
+                    'welcome'           => $settings->welcome_message,
+                    'inputPlaceholder'  => $settings->input_placeholder,
+                    'fallback'          => $settings->fallback_message,
+                ],
+
+                // =====================
+                // 🗨 Messages style
+                // =====================
+                'messages' => [
+                    'user' => [
+                        'background' => $settings->message_user_background,
+                        'color'      => $settings->message_user_color,
+                    ],
+                    'bot' => [
+                        'background' => $settings->message_bot_background,
+                        'color'      => $settings->message_bot_color,
+                    ],
+                ]
+            ],
+        ]);
+    }*/
+    public function widgetConfig(string $site_id): JsonResponse
+    {
+        // =====================
+        // 🔍 1. Vérifier le site
+        // =====================
+        $site = Site::query()
+            ->where('id', $site_id)
+            ->first();
+
+        if (!$site) {
+            return response()->json([
+                'success' => false,
+                'error'   => 'SITE_NOT_FOUND',
+            ], 404);
+        }
+
+        // ======================================================
+        // ⚙️ 2. Créer les settings s'ils n'existent pas (Option B)
+        // ======================================================
+        $settings = WidgetSetting::query()->firstOrCreate(
+            ['site_id' => $site->id],
+            [
+                'id' => Str::uuid(),
+                'site_id' => $site->id,
+            ]
+        );
+
+        $settings->refresh();
+
+        // =====================================
+        // 🚫 3. Vérifier si le widget est activé
+        // =====================================
+        /*if (!$settings->widget_enabled) {
+            return response()->json([
+                'success' => false,
+                'error'   => 'WIDGET_DISABLED',
+            ], 403);
+        }*/
+
+        // =====================
+        // ✅ 4. Retourner la config
+        // =====================
+        return response()->json([
+            'success' => true,
+            'config' => [
+
+                // =====================
+                // 🔘 Button
+                // =====================
+                'button' => [
+                    'text'       => $settings->button_text,
+                    'background' => $settings->button_background,
+                    'color'      => $settings->button_color,
+                    'position'   => $settings->button_position,
+                    'offsetX'    => $settings->button_offset_x,
+                    'offsetY'    => $settings->button_offset_y,
+                ],
+            ],
+        ]);
+    }
 }
