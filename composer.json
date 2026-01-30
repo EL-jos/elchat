@@ -18,7 +18,8 @@
         "staudenmeir/eloquent-has-many-deep": "^1.21",
         "symfony/browser-kit": "^7.2",
         "symfony/http-client": "^6.2",
-        "tymon/jwt-auth": "^2.2"
+        "tymon/jwt-auth": "^2.2",
+        "ext-xmlwriter": "*"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

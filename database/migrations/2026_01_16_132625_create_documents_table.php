@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('documents', function (Blueprint $table) {
             $table->uuid('id')->primary();
-            $table->enum('type', ['image', 'file', 'other']);
+            $table->enum('type', ['image', 'file', 'sitemap', 'other']);
             $table->text('path');
             $table->uuidMorphs('documentable');
             $table->integer('priority')->default(0);

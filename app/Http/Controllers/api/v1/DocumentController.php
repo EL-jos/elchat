@@ -18,6 +18,7 @@ class DocumentController extends Controller
      */
     public function store(Request $request, Site $site)
     {
+        //dd($request->all(), $site->id);
         $request->validate([
             'document' => 'required|file|max:10240|mimes:pdf,doc,docx,xls,xlsx,csv,txt',
         ]);
@@ -39,7 +40,6 @@ class DocumentController extends Controller
         }
 
     }
-
     private function moveImage($file)
     {
         $currentDateTime = Carbon::now();
@@ -64,14 +64,16 @@ class DocumentController extends Controller
 
             foreach ($files as $file) {
                 $documentPath = $this->moveImage($file);
-                $document = new Document([ 'id' => (string) Str::uuid(), 'path' => $documentPath, 'type' => $type]);
+                $extension = $files->getClientOriginalExtension();
+                $document = new Document([ 'id' => (string) Str::uuid(), 'path' => $documentPath, 'type' => $type, 'extension' => $extension]);
                 $document = $site->documents()->save($document);
             }
 
         } else {
 
             $documentPath = $this->moveImage($files);
-            $document = new Document([ 'id' => (string) Str::uuid(), 'path' => $documentPath, 'type' => $type]);
+            $extension = $files->getClientOriginalExtension();
+            $document = new Document([ 'id' => (string) Str::uuid(), 'path' => $documentPath, 'type' => $type, 'extension' => $extension]);
             $document = $site->documents()->save($document);
 
         }

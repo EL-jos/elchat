@@ -126,7 +126,7 @@ class IndexService
     public function indexDocument(Document $document, array $context = []): void
     {
         // 1️⃣ Extraction du texte
-        $text = $this->extractTextFromDocument($document->path, $document->type);
+        $text = $this->extractTextFromDocument($document->path, $document->extension);
 
         if (strlen($text) < 50) {
             Log::info("Document trop court, ignoré: {$document->path}");
@@ -178,11 +178,11 @@ class IndexService
     /**
      * Extraction du texte selon type
      */
-    protected function extractTextFromDocument(string $path, string $type): string
+    protected function extractTextFromDocument(string $path, string $extension): string
     {
         $fullPath = public_path($path);
 
-        return match($type) {
+        return match($extension) {
             'pdf' => $this->extractTextFromPDF($fullPath),
             'doc', 'docx' => $this->extractTextFromWord($fullPath),
             'txt' => file_get_contents($fullPath),
@@ -270,19 +270,15 @@ class IndexService
         if (!file_exists($fullPath)) return '';
         return trim(file_get_contents($fullPath));
     }
-
     /**
      * Indexe un document WooCommerce CSV/Excel
      */
     public function indexWooCommerceDocument(Document $document): void
     {
         $fullPath = public_path($document->path);
-        $type = strtolower($document->type);
-        $type = "csv";
+        $extension = strtolower($document->extension);
 
-        $products = $this->parseWooCommerceFile($fullPath, $type);
-
-        //dd($document->path, $fullPath, $type,$products);
+        $products = $this->parseWooCommerceFile($fullPath, $extension);
 
         if (empty($products)) {
             Log::info("Aucun produit trouvé dans le document: {$document->path}");
@@ -377,18 +373,17 @@ class IndexService
 
 
     }
-
     /**
      * Parse CSV / Excel WooCommerce
      */
-    protected function parseWooCommerceFile(string $fullPath, string $type): array
+    protected function parseWooCommerceFile(string $fullPath, string $extension): array
     {
         if (!file_exists($fullPath)) return [];
 
         $products = [];
 
         try {
-            if (in_array($type, ['xls','xlsx'])) {
+            if (in_array($extension, ['xls','xlsx'])) {
                 $spreadsheet = IOFactory::load($fullPath);
                 foreach ($spreadsheet->getAllSheets() as $sheet) {
                     $rows = $sheet->toArray();
@@ -397,7 +392,7 @@ class IndexService
                         $products[] = array_combine($headers, $row);
                     }
                 }
-            } elseif ($type === 'csv') {
+            } elseif ($extension === 'csv') {
                 if (($handle = fopen($fullPath, 'r')) !== false) {
                     $headers = fgetcsv($handle, 0, ",");
                     $headers = array_map('strtolower', $headers);

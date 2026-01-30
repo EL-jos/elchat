@@ -20,11 +20,8 @@ class IndexDocumentJob implements ShouldQueue
 
     public function handle(IndexService $indexService)
     {
-        $type = strtolower($this->document->type);
-        $type = "csv";
-        //dd("c'est un produit", $type);
-        // Si CSV/Excel, on considère WooCommerce
-        if (in_array($type, ['csv','xls','xlsx'])) {
+
+        if (in_array($this->document->extension, ['csv','xls','xlsx'])) {
             $indexService->indexWooCommerceDocument($this->document);
         } else {
             $indexService->indexDocument($this->document);

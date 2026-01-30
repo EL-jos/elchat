@@ -69,8 +69,13 @@ class CrawlService
 
             Log::info("Links found for {$normalizedUrl}: " . implode(', ', $links));
 
+            $allowedPages = $site->include_pages ?? [];
+
             foreach ($links as $link) {
-                if (!in_array($link, $visited, true)) {
+                if (
+                    !in_array($link, $visited, true) &&
+                    (empty($allowedPages) || in_array($link, $allowedPages))
+                ) {
                     $queue[] = ['url' => $link, 'depth' => $depth + 1];
                 }
             }

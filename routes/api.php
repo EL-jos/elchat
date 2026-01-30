@@ -34,16 +34,17 @@ Route::prefix('v1')->group(function () {
         Route::apiResource('site', SiteController::class);
         Route::controller(SiteController::class)->group(function () {
             Route::post('site/{id}/crawl', 'crawl');
-            Route::post('site/{site_id}/documents', 'uploadDocument');
+            //Route::post('site/{site_id}/documents', 'uploadDocument');
             Route::get('site/{siteId}/pages/overview', 'pagesOverview');
             Route::get('site/{site}/widget-test', 'widgetTest');
             Route::get('/site/{site_id}/widget/config', 'widgetConfig');
+            Route::post('/site/sitemap', [SiteController::class, 'generateSitemap']);
         });
         Route::post('/chat/ask', [ChatController::class, 'ask']);
         Route::apiResource('conversation', ConversationController::class)->except(['store', 'update', 'destroy']);
         Route::post('/site/{site}/manual-content', [ManualContentController::class, 'store']);
         Route::post('/site/{site}/sitemap', [SitemapController::class, 'store']);
-        Route::post('/site/{site}/document', [DocumentController::class, 'store']);
+        Route::post('/site/{site}/documents', [DocumentController::class, 'store']);
         Route::apiResource('type_site', TypeSiteController::class)->only(['index']);
         Route::apiResource('widget_setting', WidgetSettingController::class)->except(['index']);
         Route::controller(WidgetSettingController::class)->group(function () {

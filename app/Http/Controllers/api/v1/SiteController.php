@@ -4,6 +4,7 @@ namespace App\Http\Controllers\api\v1;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\CrawlSiteJob;
+use App\Jobs\GenerateSitemapJob;
 use App\Models\Chunk;
 use App\Models\Conversation;
 use App\Models\CrawlJob;
@@ -32,13 +33,11 @@ class SiteController extends Controller
 {
     protected $crawlService;
     protected $indexService;
-
     public function __construct(CrawlService $crawlService, IndexService $indexService)
     {
         $this->crawlService = $crawlService;
         $this->indexService = $indexService;
     }
-
     /**
      * Liste des sites de l'utilisateur
      */
@@ -155,11 +154,7 @@ class SiteController extends Controller
             'site' => $site
         ]);
     }
-    private function getGoogleFaviconSecure(
-        string $url,
-        int $size = 64,
-        bool $removeWww = true
-    ): ?string {
+    private function getGoogleFaviconSecure( string $url, int $size = 64, bool $removeWww = true ): ?string {
 
         // Tailles autorisées par Google
         $allowedSizes = [16, 32, 48, 64, 128, 256];
@@ -555,5 +550,21 @@ class SiteController extends Controller
                 ],
             ],
         ]);
+    }
+    public function generateSitemap(Request $request)
+    {
+        // Validation de l'ID soumis par l'utilisateur
+        $data = $request->validate([
+            'site_id' => 'required|uuid|exists:sites,id',
+        ]);
+        // Récupération du site
+        $site = Site::findOrFail($data['site_id']);
+        // Dispatch du job asynchrone
+        GenerateSitemapJob::dispatch($site);
+
+        return response()->json([
+            'message' => 'La génération du sitemap a été lancée pour le site : ' . $site->url,
+        ], 202);
+
     }
 }
