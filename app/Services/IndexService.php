@@ -5,6 +5,7 @@ use App\Models\Document;
 use App\Models\Page;
 use App\Models\Chunk;
 use App\Models\Site;
+use App\Traits\TextNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpWord\IOFactory;
@@ -13,6 +14,8 @@ use Throwable;
 
 class IndexService
 {
+
+    use TextNormalizer;
     public function __construct(
         protected EmbeddingService $embeddingService
     ) {}
@@ -409,5 +412,141 @@ class IndexService
         return $products;
     }
 
+    public function indexStandardProduct(array $product, Document $document, int $priority): void
+    {
+        $productIndex = $priority + 1;
+
+        $identifier = $product['product_name']
+            ?? $product['product_reference']
+            ?? 'unknown-product';
+
+        Log::info('Indexation produit démarrée', [
+            'document_id'   => $document->id,
+            'product_index' => $productIndex,
+            'identifier'    => $identifier,
+        ]);
+
+        // Séparateurs dynamiques
+        $splitValues = function (string $value): array {
+            $value = trim($value);
+            if ($value === '') return [];
+            return array_map('trim', preg_split('/[,;|]/', $value));
+        };
+
+        $chunksToCreate = [];
+        $subPriorityOffset = 0;
+
+        // 1️⃣ Chunk global (contexte complet)
+        $parts = [];
+        foreach ($product as $key => $value) {
+            if ($value) {
+                $parts[] = ucfirst(str_replace('_', ' ', $key)) . ": " . $value;
+            }
+        }
+
+        $globalText = implode(". ", $parts) . ".";
+
+        if (!$this->chunkAlreadyExistsForDocument($document, $globalText)) {
+            $chunksToCreate[] = [
+                'text'     => $globalText,
+                'priority' => $productIndex,
+                'metadata' => [
+                    'type' => 'global',
+                    'identifier' => $identifier,
+                    'product_index' => $productIndex,
+                    'raw' => $product,
+                ],
+            ];
+        }
+
+        // 2️⃣ Chunks granulaires par champ / variante
+        foreach ($product as $key => $value) {
+            if (!$value) continue;
+
+            foreach ($splitValues($value) as $v) {
+                if ($v === '') continue;
+
+                $aliases = $this->generateStatisticalAliases(
+                    str_replace('_', ' ', $key),
+                    $v
+                );
+
+                foreach ($aliases as $aliasText) {
+                    if ($this->chunkAlreadyExistsForDocument($document, $aliasText)) {
+                        continue;
+                    }
+
+                    // 🔹 AJOUTER LA FILTRATION DES ALIAS TROP COURTS ICI
+                    if (strlen($aliasText) < 3) {
+                        continue;
+                    }
+                    if (str_word_count($aliasText) === 1 && strlen($aliasText) < 4) {
+                        continue;
+                    }
+
+                    $embedding = $this->embeddingService->getEmbedding($aliasText);
+
+                    Chunk::create([
+                        'document_id' => $document->id,
+                        'site_id'     => $document->documentable->id,
+                        'source_type' => 'woocommerce',
+                        'text'        => $aliasText,
+                        'embedding'   => $embedding,
+                        'priority'    => $productIndex + 10,
+                        'metadata'    => [
+                            'type' => 'statistical_alias',
+                            'field' => $key,
+                            'value' => $v,
+                            'product_index' => $productIndex,
+                        ],
+                    ]);
+                }
+            }
+        }
+
+        // 3️⃣ Création des chunks
+        foreach ($chunksToCreate as $chunk) {
+            $embedding = $this->embeddingService->getEmbedding($chunk['text']);
+
+            Chunk::create([
+                'document_id' => $document->id,
+                'site_id'     => $document->documentable->id,
+                'source_type' => 'woocommerce',
+                'text'        => $chunk['text'],
+                'embedding'   => $embedding,
+                'metadata'    => $chunk['metadata'],
+                'priority'    => $chunk['priority'],
+            ]);
+        }
+
+        Log::info('Produit indexé avec succès', [
+            'document_id'    => $document->id,
+            'product_index'  => $productIndex,
+            'identifier'     => $identifier,
+            'chunks_created' => count($chunksToCreate),
+        ]);
+    }
+    protected function generateStatisticalAliases(string $label, string $value): array
+    {
+        $aliases = [];
+
+        $label = $this->normalizeText($label);
+        $value = $this->normalizeText($value);
+
+        // Forme complète
+        $aliases[] = "{$label}: {$value}";
+
+        // Valeur seule (important pour matching libre)
+        $aliases[] = $value;
+
+        // Tokenisation
+        foreach (explode(' ', $value) as $token) {
+            if (strlen($token) >= 3) {
+                $aliases[] = $token;
+            }
+        }
+
+        return array_unique($aliases);
+    }
 }
 

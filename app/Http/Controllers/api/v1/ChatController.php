@@ -23,9 +23,11 @@ class ChatController extends Controller
             'conversation_id' => 'nullable|exists:conversations,id',
         ]);
 
+        //dd(auth()->user()->ownedAccount);
         $site = Site::where('id', $data['site_id'])
-            ->where('account_id', auth()->user()->ownedAccount->id)
+            //->where('account_id', auth()->user()->ownedAccount->id)
             ->firstOrFail();
+        //dd($site);
 
         // 🔑 Continuité OU nouvelle conversation
         if (!empty($data['conversation_id'])) {

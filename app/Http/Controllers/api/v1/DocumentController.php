@@ -4,6 +4,7 @@ namespace App\Http\Controllers\api\v1;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\IndexDocumentJob;
+use App\Jobs\ProductImportJob;
 use App\Models\Document;
 use App\Models\Site;
 use Illuminate\Http\Request;
@@ -18,19 +19,28 @@ class DocumentController extends Controller
      */
     public function store(Request $request, Site $site)
     {
-        //dd($request->all(), $site->id);
         $request->validate([
-            'document' => 'required|file|max:10240|mimes:pdf,doc,docx,xls,xlsx,csv,txt',
+            'file' => 'required|file|max:10240|mimes:pdf,doc,docx,xls,xlsx,csv,txt',
+            'mapping' => 'required|json',
         ]);
 
-        if ($request->hasFile('document')) {
-            $files = $request->file('document');
+        if ($request->hasFile('file')) {
+            $files = $request->file('file');
             $document = $this->saveDocument($files, $site, 'file');
+            $mapping = json_decode($request->mapping, true, 512, JSON_THROW_ON_ERROR);
 
             Log::info("Document uploadé: {$document->path}");
 
             // Dispatch indexation (support WooCommerce inclus)
-            IndexDocumentJob::dispatch($document);
+            if($document->extension === 'csv' || $document->extension === 'xlsx' || $document->extension === 'xls') {
+                ProductImportJob::dispatch(
+                    $document,
+                    $mapping,
+                    $site
+                );
+            }else{
+                IndexDocumentJob::dispatch($document);
+            }
 
             return response()->json([
                 'success' => true,

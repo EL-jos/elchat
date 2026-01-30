@@ -21,11 +21,11 @@ class IndexDocumentJob implements ShouldQueue
     public function handle(IndexService $indexService)
     {
 
-        if (in_array($this->document->extension, ['csv','xls','xlsx'])) {
+        /*if (in_array($this->document->extension, ['csv','xls','xlsx'])) {
             $indexService->indexWooCommerceDocument($this->document);
-        } else {
+        } else {*/
             $indexService->indexDocument($this->document);
-        }
+        //}
 
         Log::info("Document indexé: {$this->document->path}");
     }
