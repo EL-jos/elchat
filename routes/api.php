@@ -1,5 +1,6 @@
 <?php
-
+ini_set('max_execution_time', 0);
+set_time_limit(0);
 use App\Http\Controllers\api\v1\ChatController;
 use App\Http\Controllers\api\v1\ConversationController;
 use App\Http\Controllers\Api\V1\DashboardController;

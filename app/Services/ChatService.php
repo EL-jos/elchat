@@ -88,7 +88,7 @@ class ChatService
         $query = $this->normalizeText($question);
 
         // 1️⃣ Embedding de la question
-        $questionEmbedding = $this->embeddingService->getEmbedding($query);
+        $questionEmbedding = $this->embeddingService->getEmbedding($question);
 
         // 2️⃣ Charger les chunks du site
         $scored = [];
@@ -104,7 +104,7 @@ class ChatService
                         $chunk->embedding
                     );
 
-                    if ($score >= 0.30) {
+                    if ($score >= 0.39) {
                         $scored[] = [
                             'text' => $chunk->text,
                             'score' => $score,
@@ -124,12 +124,12 @@ class ChatService
                 ?: ($a['priority'] <=> $b['priority']);
         });
 
-        $topChunks = array_slice($scored, 0, 5); // ou 3 si tu veux moins
+        $topChunks = array_slice($scored, 0, 3); // ou 3 si tu veux moins
 
         // 3️⃣ Construire le contexte
 
         $minRequiredChunks = 1;
-        $minConfidenceScore = 0.30; //0.39 ou 0.45 sont bon aussi
+        $minConfidenceScore = 0.39; //0.39 ou 0.45 sont bon aussi
 
         $validChunks = array_filter($scored, fn ($c) =>
             $c['score'] >= $minConfidenceScore

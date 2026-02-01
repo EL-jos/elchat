@@ -2,6 +2,7 @@
 namespace App\Services;
 
 use App\Models\Document;
+use App\Models\FieldSynonym;
 use App\Models\Page;
 use App\Models\Chunk;
 use App\Models\Site;
@@ -411,10 +412,18 @@ class IndexService
 
         return $products;
     }
-
     public function indexStandardProduct(array $product, Document $document, int $priority): void
     {
         $productIndex = $priority + 1;
+
+        // 🛑 GARDE-FOU : produit déjà indexé → skip
+        if ($this->productAlreadyIndexed($document, $productIndex)) {
+            Log::info('Produit déjà indexé — skip', [
+                'document_id'   => $document->id,
+                'product_index' => $productIndex,
+            ]);
+            return;
+        }
 
         $identifier = $product['product_name']
             ?? $product['product_reference']
@@ -426,7 +435,7 @@ class IndexService
             'identifier'    => $identifier,
         ]);
 
-        // Séparateurs dynamiques
+        // 🔹 Séparateurs dynamiques (virgule, point-virgule, pipe)
         $splitValues = function (string $value): array {
             $value = trim($value);
             if ($value === '') return [];
@@ -434,7 +443,6 @@ class IndexService
         };
 
         $chunksToCreate = [];
-        $subPriorityOffset = 0;
 
         // 1️⃣ Chunk global (contexte complet)
         $parts = [];
@@ -459,13 +467,14 @@ class IndexService
             ];
         }
 
-        // 2️⃣ Chunks granulaires par champ / variante
+        // 2️⃣ Chunks granulaires par champ / variante avec synonymes
         foreach ($product as $key => $value) {
             if (!$value) continue;
 
             foreach ($splitValues($value) as $v) {
                 if ($v === '') continue;
 
+                // 🔹 Récupération des alias + synonymes
                 $aliases = $this->generateStatisticalAliases(
                     str_replace('_', ' ', $key),
                     $v
@@ -476,13 +485,9 @@ class IndexService
                         continue;
                     }
 
-                    // 🔹 AJOUTER LA FILTRATION DES ALIAS TROP COURTS ICI
-                    if (strlen($aliasText) < 3) {
-                        continue;
-                    }
-                    if (str_word_count($aliasText) === 1 && strlen($aliasText) < 4) {
-                        continue;
-                    }
+                    // 🔹 Filtrage des alias trop courts
+                    if (strlen($aliasText) < 3) continue;
+                    if (str_word_count($aliasText) === 1 && strlen($aliasText) < 4) continue;
 
                     $embedding = $this->embeddingService->getEmbedding($aliasText);
 
@@ -504,7 +509,7 @@ class IndexService
             }
         }
 
-        // 3️⃣ Création des chunks
+        // 3️⃣ Création des chunks globaux
         foreach ($chunksToCreate as $chunk) {
             $embedding = $this->embeddingService->getEmbedding($chunk['text']);
 
@@ -526,6 +531,9 @@ class IndexService
             'chunks_created' => count($chunksToCreate),
         ]);
     }
+    /**
+     * 🔹 Nouvelle version de generateStatisticalAliases
+     */
     protected function generateStatisticalAliases(string $label, string $value): array
     {
         $aliases = [];
@@ -536,17 +544,43 @@ class IndexService
         // Forme complète
         $aliases[] = "{$label}: {$value}";
 
-        // Valeur seule (important pour matching libre)
+        // Valeur seule
         $aliases[] = $value;
 
-        // Tokenisation
+        // Tokens individuels
         foreach (explode(' ', $value) as $token) {
-            if (strlen($token) >= 3) {
-                $aliases[] = $token;
+            if (strlen($token) >= 3) $aliases[] = $token;
+        }
+
+        // 🔹 Synonymes humains depuis field_synonyms
+        $synonyms = FieldSynonym::where('field_key', $label)
+            //->where('language', 'fr')
+            ->pluck('synonym')
+            ->toArray();
+
+        if (!empty($synonyms)) {
+            shuffle($synonyms); // varier les synonymes
+            $count = min(max(5, rand(5, 7)), count($synonyms));
+            $selectedSynonyms = array_slice($synonyms, 0, $count);
+
+            foreach ($selectedSynonyms as $syn) {
+                $syn = $this->normalizeText($syn);
+                if ($syn !== '' && !in_array($syn, $aliases)) $aliases[] = $syn;
             }
         }
 
         return array_unique($aliases);
     }
+
+    protected function productAlreadyIndexed(
+        Document $document,
+        int $productIndex
+    ): bool {
+        return Chunk::where('document_id', $document->id)
+            ->where('source_type', 'woocommerce')
+            ->where('metadata->product_index', $productIndex)
+            ->exists();
+    }
+
 }
 
