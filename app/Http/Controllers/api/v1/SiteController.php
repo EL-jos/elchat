@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\api\v1;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\ComputeKnowledgeQualityJob;
 use App\Jobs\CrawlSiteJob;
 use App\Jobs\GenerateSitemapJob;
 use App\Models\Chunk;
@@ -566,5 +567,26 @@ class SiteController extends Controller
             'message' => 'La génération du sitemap a été lancée pour le site : ' . $site->url,
         ], 202);
 
+    }
+
+    public function calculateKnowledgeQuality(Request $request){
+
+        $validator = Validator::make($request->all(), [
+            'site_id' => 'required|uuid|exists:sites,id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['error' => $validator->errors()], 400);
+        }
+        $siteId = $request->input('site_id'); // facultatif
+
+        ComputeKnowledgeQualityJob::dispatch($siteId);
+
+        return response()->json([
+            'success' => true,
+            'message' => $siteId
+                ? "Recalcul du KQI pour le site $siteId lancé."
+                : "Recalcul du KQI pour tous les sites lancé."
+        ]);
     }
 }

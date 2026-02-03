@@ -21,13 +21,16 @@ class DocumentController extends Controller
     {
         $request->validate([
             'file' => 'required|file|max:10240|mimes:pdf,doc,docx,xls,xlsx,csv,txt',
-            'mapping' => 'required|json',
+            'mapping' => 'nullable|json',
         ]);
 
         if ($request->hasFile('file')) {
             $files = $request->file('file');
             $document = $this->saveDocument($files, $site, 'file');
-            $mapping = json_decode($request->mapping, true, 512, JSON_THROW_ON_ERROR);
+            if ($request->input('mapping') !== null) {
+                $mapping = json_decode($request->mapping, true, 512, JSON_THROW_ON_ERROR);
+            }
+
 
             Log::info("Document uploadé: {$document->path}");
 

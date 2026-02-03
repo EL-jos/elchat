@@ -464,6 +464,8 @@ class DashboardController extends Controller
             'settings_crawl' => $settings_crawl,
 
             'settings' => $settings,
+
+            'knowledge_quality_socre' => $site->knowledgeQualityScore,
         ]);
     }/*
     {

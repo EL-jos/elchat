@@ -124,7 +124,7 @@ class ChatService
                 ?: ($a['priority'] <=> $b['priority']);
         });
 
-        $topChunks = array_slice($scored, 0, 3); // ou 3 si tu veux moins
+        $topChunks = array_slice($scored, 0, 5); // ou 3 si tu veux moins
 
         // 3️⃣ Construire le contexte
 
@@ -202,6 +202,11 @@ class ChatService
         - Termine si possible par une proposition d’aide naturelle (sans forcer la vente).
         - Tu ne fais jamais de promesse engageante (résultat garanti, effet certain, engagement contractuel).
         - Si la conversation est déjà entamée, tu ne recommences jamais par une formule de salutation.
+        Lorsque les informations internes décrivent un PRODUIT, tu peux mentionner :
+            - son nom
+            - sa référence
+            - sa description
+        SI ET SEULEMENT SI ces informations sont présentes explicitement.
 
         RÈGLE ABSOLUE SUR LA CONVERSATION :
         - Les messages précédents servent UNIQUEMENT à comprendre le besoin du client.
@@ -209,11 +214,15 @@ class ChatService
         - Si une information n’est PAS présente dans les informations internes, tu dois :
           - rester général
           - ou proposer d’aider autrement
-        - Tu ne dois JAMAIS déduire un produit, une offre ou un prix à partir d’une réponse précédente.
+        - Pour toute demande de type PRODUIT, si plusieurs variantes existent dans les informations internes, tu dois en citer au moins deux différentes.
+
         INTERDICTION ABSOLUE :
         - Tu ne dois JAMAIS citer un nom de produit, pack ou offre
           s’il n’apparaît PAS explicitement mot pour mot
           dans les Informations internes.
+        - Tu ne dois JAMAIS déduire un produit, une offre ou un prix à partir d’une réponse précédente.
+        - Tu ne dois JAMAIS utiliser des expressions comme : "résultats exceptionnels", "performance garantie", "qualité supérieure"
+        si elles ne sont pas explicitement écrites.
 
         RÔLE :
         Conseiller commercial / employé de l’entreprise.

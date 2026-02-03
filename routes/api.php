@@ -40,6 +40,7 @@ Route::prefix('v1')->group(function () {
             Route::get('site/{site}/widget-test', 'widgetTest');
             Route::get('/site/{site_id}/widget/config', 'widgetConfig');
             Route::post('/site/sitemap', [SiteController::class, 'generateSitemap']);
+            Route::post('/knowledge-quality/calculate', 'calculateKnowledgeQuality');
         });
         Route::post('/chat/ask', [ChatController::class, 'ask']);
         Route::apiResource('conversation', ConversationController::class)->except(['store', 'update', 'destroy']);

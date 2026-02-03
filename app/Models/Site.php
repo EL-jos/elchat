@@ -42,8 +42,13 @@ class Site extends BaseModel
         return $this->belongsToMany(User::class)
             ->withPivot(['first_seen_at', 'last_seen_at']);
     }
-
     public function settings(){
         return $this->hasOne(WidgetSetting::class);
+    }
+    public function productIport(){
+        return $this->hasMany(ProductImport::class);
+    }
+    public function knowledgeQualityScore(){
+        return $this->hasOne(KnowledgeQualityScore::class);
     }
 }
