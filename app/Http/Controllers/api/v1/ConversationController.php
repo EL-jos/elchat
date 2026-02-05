@@ -4,6 +4,7 @@ namespace App\Http\Controllers\api\v1;
 
 use App\Http\Controllers\Controller;
 use App\Models\Conversation;
+use App\Models\Site;
 use Illuminate\Http\Request;
 
 class ConversationController extends Controller
@@ -18,6 +19,7 @@ class ConversationController extends Controller
         ]);
         $conversations = Conversation::with('messages')
             ->where('site_id', $data['site_id'])
+            ->where('user_id', auth()->id())
             ->get();
 
         return response()->json($conversations);
@@ -50,5 +52,15 @@ class ConversationController extends Controller
     public function destroy(Conversation $conversation)
     {
         //
+    }
+
+    public function messages(string $conversationId, string $siteId){
+        $conversation = Conversation::where('id', $conversationId)
+                        ->where('user_id', auth()->id())
+                        ->where('site_id', $siteId)
+                        ->with('messages')
+                        ->first();
+
+        return response()->json($conversation);
     }
 }

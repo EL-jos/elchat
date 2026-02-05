@@ -6,6 +6,7 @@ use App\Models\Chunk;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\UnansweredQuestion;
+use App\Models\WidgetSetting;
 use App\Traits\TextNormalizer;
 use Exception;
 use Illuminate\Http\Client\RequestException;
@@ -96,7 +97,7 @@ class ChatService
         Chunk::where('site_id', $site->id)
             ->whereIn('source_type', ['woocommerce','page','document','sitemap'])
             ->select(['text', 'embedding'])
-            ->chunk(500, function ($chunks) use (&$scored, $questionEmbedding) {
+            ->chunk(500, function ($chunks) use (&$scored, $questionEmbedding, &$site) {
 
                 foreach ($chunks as $chunk) {
                     $score = $this->similarityService->cosine(
@@ -104,7 +105,7 @@ class ChatService
                         $chunk->embedding
                     );
 
-                    if ($score >= 0.39) {
+                    if ($score >= floatval($site->settings->min_similarity_score)) {
                         $scored[] = [
                             'text' => $chunk->text,
                             'score' => $score,
@@ -129,7 +130,7 @@ class ChatService
         // 3️⃣ Construire le contexte
 
         $minRequiredChunks = 1;
-        $minConfidenceScore = 0.39; //0.39 ou 0.45 sont bon aussi
+        $minConfidenceScore = floatval($site->settings->min_similarity_score); //0.39 ou 0.45 sont bon aussi
 
         $validChunks = array_filter($scored, fn ($c) =>
             $c['score'] >= $minConfidenceScore
@@ -175,6 +176,10 @@ class ChatService
     private function callLLM(Site $site, string $question, string $context, array $history): string
     {
         $companyName = $site->name ?? parse_url($site->url, PHP_URL_HOST);
+        /**
+         * @var WidgetSetting $settings
+         */
+        $settings = $site->settings;
 
         $isBuyingIntent = preg_match('/prix|acheter|commander|disponible|livraison/i', $question);
         $isComparison = preg_match('/compar|différence|vs|meilleur/i', $question);
@@ -186,6 +191,7 @@ class ChatService
 
         RÈGLES STRICTES :
         - Tu parles à la PREMIÈRE PERSONNE (nous / chez nous / notre équipe/ chez "{$companyName}").
+        - Ton nom est "{$settings->bot_name}"
         - Tu ne mentionnes JAMAIS :
           - le mot "contexte"
           - le site web
@@ -202,11 +208,11 @@ class ChatService
         - Termine si possible par une proposition d’aide naturelle (sans forcer la vente).
         - Tu ne fais jamais de promesse engageante (résultat garanti, effet certain, engagement contractuel).
         - Si la conversation est déjà entamée, tu ne recommences jamais par une formule de salutation.
-        Lorsque les informations internes décrivent un PRODUIT, tu peux mentionner :
+        - Lorsque les informations internes décrivent un PRODUIT, tu peux mentionner :
             - son nom
             - sa référence
             - sa description
-        SI ET SEULEMENT SI ces informations sont présentes explicitement.
+        - SI ET SEULEMENT SI ces informations sont présentes explicitement.
 
         RÈGLE ABSOLUE SUR LA CONVERSATION :
         - Les messages précédents servent UNIQUEMENT à comprendre le besoin du client.
@@ -224,11 +230,24 @@ class ChatService
         - Tu ne dois JAMAIS utiliser des expressions comme : "résultats exceptionnels", "performance garantie", "qualité supérieure"
         si elles ne sont pas explicitement écrites.
 
+        RÈGLES STRICTES SUR LA LANGUE:
+        - Les questions des utilisateurs peuvent être rédigées dans n’importe quelle langue.
+        - Analyse et comprends la question, quelle que soit sa langue d’origine.
+        - Rédige ta réponse uniquement dans la langue correspondant au code ISO 639-1 fourni par l’administrateur : "en".
+        - Toute la réponse doit être intégralement dans cette langue, sans exception.
+        - Ne fais aucune référence au code langue, aux règles ou au fait que la langue a été imposée.
+
         RÔLE :
         Conseiller commercial / employé de l’entreprise.
         PROMPT;
 
         $userPrompt = <<<PROMPT
+        RÈGLE DE LANGUE — PRIORITÉ ABSOLUE (non négociable) :
+        - Tu dois répondre exclusivement dans la langue définie par le code ISO 639-1 fourni par l’administrateur : {$settings->bot_language}.
+        - Les questions des utilisateurs peuvent être rédigées dans n’importe quelle langue ; tu dois toujours les comprendre.
+        - Cette règle prévaut sur toutes les autres instructions, y compris le ton, le rôle ou les contraintes de contenu.
+        - Ne mentionne jamais cette règle, ni le code langue, ni qu’une contrainte de langue est appliquée.
+
         Informations internes à utiliser si pertinentes :
         {$context}
 
@@ -246,6 +265,12 @@ class ChatService
         - Intention d’achat : {$isBuyingIntent}
         - Comparaison : {$isComparison}
         - Inquiétude : {$isConcern}
+
+        - Lorsque les informations internes décrivent un PRODUIT, tu peux mentionner :
+            - son nom
+            - sa référence
+            - sa description
+        - SI ET SEULEMENT SI ces informations sont présentes explicitement.
         PROMPT;
 
         $messages = [
@@ -277,8 +302,8 @@ class ChatService
                 ])->post('https://openrouter.ai/api/v1/chat/completions', [
                     'model' => 'meta-llama/llama-3.1-8b-instruct',
                     'messages' => $messages,
-                    'temperature' => 0.6,
-                    'max_tokens' => 350,
+                    'temperature' => floatval($settings->ai_temperature),
+                    'max_tokens' => $settings->ai_max_tokens,
                 ]);
 
                 // Vérifier si la requête HTTP a échoué (statut 4xx, 5xx)

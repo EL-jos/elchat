@@ -44,6 +44,9 @@ Route::prefix('v1')->group(function () {
         });
         Route::post('/chat/ask', [ChatController::class, 'ask']);
         Route::apiResource('conversation', ConversationController::class)->except(['store', 'update', 'destroy']);
+        Route::controller(ConversationController::class)->group(function () {
+            Route::get('/conversation/{conversationId}/{siteId}', 'messages');
+        });
         Route::post('/site/{site}/manual-content', [ManualContentController::class, 'store']);
         Route::post('/site/{site}/sitemap', [SitemapController::class, 'store']);
         Route::post('/site/{site}/documents', [DocumentController::class, 'store']);

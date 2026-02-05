@@ -64,7 +64,7 @@ return new class extends Migration
 
 
             $table->decimal('ai_temperature', 3, 2)->default(0.70);
-            $table->integer('ai_max_tokens')->default(500);
+            $table->integer('ai_max_tokens')->default(350);
             // 🔹 Seuil minimum de score (0.00 → 1.00)
             $table->decimal('min_similarity_score', 5, 2)
                 ->default(0.30)
