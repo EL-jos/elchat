@@ -11,4 +11,8 @@ class WidgetSetting extends BaseModel
     public function site(){
         return $this->belongsTo(Site::class);
     }
+
+    public function aiRole(){
+        return $this->belongsTo(AIRole::class);
+    }
 }

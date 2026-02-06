@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\AIRole;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
@@ -27,7 +28,8 @@ class DatabaseSeeder extends Seeder
         //Role::create(['id' => (string) Str::uuid(), 'name' => 'admin']);
         //Role::create(['id' => (string) Str::uuid(), 'name' => 'visitor']);
         $this->call([
-            UserSeed::class,
+            //UserSeed::class,
+            AIRoleSeeder::class,
         ]);
     }
 }

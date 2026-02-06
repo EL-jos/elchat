@@ -428,6 +428,9 @@ class DashboardController extends Controller
         ];
 
         $settings = $site->settings;
+        if($settings){
+            $settings->load('aiRole');
+        }
 
         // ---------------------
         // Response

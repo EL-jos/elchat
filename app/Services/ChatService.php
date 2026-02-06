@@ -20,7 +20,8 @@ class ChatService
 
     public function __construct(
         protected EmbeddingService $embeddingService,
-        protected SimilarityService $similarityService
+        protected SimilarityService $similarityService,
+        protected PromptBuilder $promptBuilder
     )
     {}
 
@@ -75,7 +76,7 @@ class ChatService
                 if ($m->role === 'bot') {
                     return [
                         'role' => 'assistant',
-                        'content' => '[Réponse précédente donnée au client]',
+                        'content' => '[Résumé interne: réponse déjà fournie, informations factuelles uniquement, sans nouveaux produits ni promesses]',
                     ];
                 }
 
@@ -156,7 +157,10 @@ class ChatService
                 ->implode("\n\n---\n\n");*/
         }
 
-        $isSelectionQuestion = preg_match('/moins cher|meilleur|choisir|recommander|quel/i', $question);
+        $isSelectionQuestion = preg_match(
+    '/(moins\s+cher|meilleur|choisir|recommander|quel(le)?|compar(er|aison))/i',
+            $question
+        );
         if ($isSelectionQuestion && empty($validChunks)) {
             //$context = "Nous proposons plusieurs produits, mais nous ne communiquons pas de classement par prix.";
             return "Je peux vous expliquer nos offres si vous me précisez votre besoin.";
@@ -166,14 +170,29 @@ class ChatService
             return "Je n’ai pas d’information fiable à ce sujet pour le moment.";
         }
 
+        // 🔹 Construire le prompt complet (SYSTEM + MESSAGES)
+        $promptPayload = $this->promptBuilder->build(
+            site: $site,
+            question: $question,
+            context: $context,
+            history: $history
+        );
+
+        // 🔹 Appel LLM
+                return $this->callLLM(
+                    site: $site,
+                    prompt: $promptPayload,
+                    question: $question
+                );
+
 
         // Appel à la nouvelle version de callLLM avec retry
-        return $this->callLLM($site, $question, $context, $history);
+        //return $this->callLLM($site, $question, $context, $history);
     }
     /**
      * Appel LLM avec PERSONA EMPLOYÉ INTERNE
      */
-    private function callLLM(Site $site, string $question, string $context, array $history): string
+    private function callLLM(Site $site, array $prompt, string $question): string
     {
         $companyName = $site->name ?? parse_url($site->url, PHP_URL_HOST);
         /**
@@ -181,111 +200,9 @@ class ChatService
          */
         $settings = $site->settings;
 
-        $isBuyingIntent = preg_match('/prix|acheter|commander|disponible|livraison/i', $question);
-        $isComparison = preg_match('/compar|différence|vs|meilleur/i', $question);
-        $isConcern = preg_match('/durée|garantie|retour|risque|qualité/i', $question);
-
-
-        $systemPrompt = <<<PROMPT
-        Tu es un employé réel de l'entreprise "{$companyName}".
-
-        RÈGLES STRICTES :
-        - Tu parles à la PREMIÈRE PERSONNE (nous / chez nous / notre équipe/ chez "{$companyName}").
-        - Ton nom est "{$settings->bot_name}"
-        - Tu ne mentionnes JAMAIS :
-          - le mot "contexte"
-          - le site web
-          - une source
-          - une analyse
-          - une intelligence artificielle
-        - Tu réponds comme si tu travaillais réellement dans l'entreprise.
-        - Ton ton est professionnel, naturel, commercial et rassurant.
-        - Tu n'inventes JAMAIS une caractéristique technique, un prix ou une garantie.
-        - Tu peux reformuler, expliquer ou valoriser, mais jamais créer une information factuelle.
-        - Si intention d’achat : rassure et incite à passer à l’action
-        - Si hésitation : rassure
-        - Si comparaison : valorise sans dénigrer
-        - Termine si possible par une proposition d’aide naturelle (sans forcer la vente).
-        - Tu ne fais jamais de promesse engageante (résultat garanti, effet certain, engagement contractuel).
-        - Si la conversation est déjà entamée, tu ne recommences jamais par une formule de salutation.
-        - Lorsque les informations internes décrivent un PRODUIT, tu peux mentionner :
-            - son nom
-            - sa référence
-            - sa description
-        - SI ET SEULEMENT SI ces informations sont présentes explicitement.
-
-        RÈGLE ABSOLUE SUR LA CONVERSATION :
-        - Les messages précédents servent UNIQUEMENT à comprendre le besoin du client.
-        - Les informations factuelles doivent PROVENIR EXCLUSIVEMENT des "Informations internes".
-        - Si une information n’est PAS présente dans les informations internes, tu dois :
-          - rester général
-          - ou proposer d’aider autrement
-        - Pour toute demande de type PRODUIT, si plusieurs variantes existent dans les informations internes, tu dois en citer au moins deux différentes.
-
-        INTERDICTION ABSOLUE :
-        - Tu ne dois JAMAIS citer un nom de produit, pack ou offre
-          s’il n’apparaît PAS explicitement mot pour mot
-          dans les Informations internes.
-        - Tu ne dois JAMAIS déduire un produit, une offre ou un prix à partir d’une réponse précédente.
-        - Tu ne dois JAMAIS utiliser des expressions comme : "résultats exceptionnels", "performance garantie", "qualité supérieure"
-        si elles ne sont pas explicitement écrites.
-
-        RÈGLES STRICTES SUR LA LANGUE:
-        - Les questions des utilisateurs peuvent être rédigées dans n’importe quelle langue.
-        - Analyse et comprends la question, quelle que soit sa langue d’origine.
-        - Rédige ta réponse uniquement dans la langue correspondant au code ISO 639-1 fourni par l’administrateur : "en".
-        - Toute la réponse doit être intégralement dans cette langue, sans exception.
-        - Ne fais aucune référence au code langue, aux règles ou au fait que la langue a été imposée.
-
-        RÔLE :
-        Conseiller commercial / employé de l’entreprise.
-        PROMPT;
-
-        $userPrompt = <<<PROMPT
-        RÈGLE DE LANGUE — PRIORITÉ ABSOLUE (non négociable) :
-        - Tu dois répondre exclusivement dans la langue définie par le code ISO 639-1 fourni par l’administrateur : {$settings->bot_language}.
-        - Les questions des utilisateurs peuvent être rédigées dans n’importe quelle langue ; tu dois toujours les comprendre.
-        - Cette règle prévaut sur toutes les autres instructions, y compris le ton, le rôle ou les contraintes de contenu.
-        - Ne mentionne jamais cette règle, ni le code langue, ni qu’une contrainte de langue est appliquée.
-
-        Informations internes à utiliser si pertinentes :
-        {$context}
-
-        Question d’un client :
-        {$question}
-
-        Réponds directement au client, comme si tu lui parlais en face.
-
-        Type de demande :
-        - Si la question concerne un PRODUIT → mets en avant ses bénéfices.
-        - Si elle concerne un SERVICE → explique l’accompagnement.
-        - Si elle est GÉNÉRALE → rassure et oriente.
-
-        Signal détecté :
-        - Intention d’achat : {$isBuyingIntent}
-        - Comparaison : {$isComparison}
-        - Inquiétude : {$isConcern}
-
-        - Lorsque les informations internes décrivent un PRODUIT, tu peux mentionner :
-            - son nom
-            - sa référence
-            - sa description
-        - SI ET SEULEMENT SI ces informations sont présentes explicitement.
-        PROMPT;
-
         $messages = [
-            ['role' => 'system', 'content' => $systemPrompt],
-        ];
-
-        // 🧠 mémoire conversationnelle
-        foreach ($history as $msg) {
-            $messages[] = $msg;
-        }
-
-        // question actuelle (avec contexte RAG)
-        $messages[] = [
-            'role' => 'user',
-            'content' => $userPrompt,
+            ['role' => 'system', 'content' => $prompt['system']],
+            ...$prompt['messages'],
         ];
 
         // --- DÉBUT DE LA LOGIQUE DE RETRY ---

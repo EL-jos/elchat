@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\api\v1;
 
 use App\Http\Controllers\Controller;
+use App\Models\AIRole;
 use App\Models\Site;
 use App\Models\WidgetSetting;
 use Illuminate\Http\Request;
@@ -28,14 +29,36 @@ class WidgetSettingController extends Controller
         $widgetSetting = $site->settings()->first();
 
         if (!$widgetSetting) {
+            // 🔹 Détermination automatique du rôle IA selon le type de site
+            $typeId = $site->type->id;
+
+            $aiRole = match (true) {
+                in_array($typeId, [
+                    '22222222-2222-4222-8222-222222222222',
+                    '44444444-4444-4444-8444-444444444444',
+                    '55555555-5555-4555-8555-555555555555']) => AIRole::where('name', 'Commercial')->first(),
+                in_array($typeId, [
+                    '66666666-6666-4666-8666-666666666666',
+                    'cccccccc-cccc-4ccc-8ccc-cccccccccccc']) => AIRole::where('name', 'Support')->first(),
+                in_array($typeId, [
+                    '77777777-7777-4777-8777-777777777777',
+                    '14141414-1414-4141-8141-141414141414']) => AIRole::where('name', 'Professeur')->first(),
+                in_array($typeId, [
+                    '99999999-9999-4999-8999-999999999999',
+                    '33333333-3333-4333-8333-333333333333']) => AIRole::where('name', 'Journaliste')->first(),
+                default => AIRole::where('is_default', true)->first(), // fallback Neutre
+            };
+
             $widgetSetting = WidgetSetting::create([
                 'id' => Str::uuid(),
                 'site_id' => $site->id,
+                'ai_role_id' => $aiRole->id,
             ]);
         }
 
+        $settings = $widgetSetting->refresh();
         return response()->json([
-            'data' => $widgetSetting->refresh(),
+            'data' => $settings->load('aiRole'),
         ]);
     }
 
@@ -60,9 +83,30 @@ class WidgetSettingController extends Controller
             ], 409);
         }
 
+        // 🔹 Détermination automatique du rôle IA selon le type de site
+        $typeId = $site->type->id;
+
+        $aiRole = match (true) {
+            in_array($typeId, [
+                '22222222-2222-4222-8222-222222222222',
+                '44444444-4444-4444-8444-444444444444',
+                '55555555-5555-4555-8555-555555555555']) => AIRole::where('name', 'Commercial')->first(),
+            in_array($typeId, [
+                '66666666-6666-4666-8666-666666666666',
+                'cccccccc-cccc-4ccc-8ccc-cccccccccccc']) => AIRole::where('name', 'Support')->first(),
+            in_array($typeId, [
+                '77777777-7777-4777-8777-777777777777',
+                '14141414-1414-4141-8141-141414141414']) => AIRole::where('name', 'Professeur')->first(),
+            in_array($typeId, [
+                '99999999-9999-4999-8999-999999999999',
+                '33333333-3333-4333-8333-333333333333']) => AIRole::where('name', 'Journaliste')->first(),
+            default => AIRole::where('is_default', true)->first(), // fallback Neutre
+        };
+
         $widgetSetting = WidgetSetting::create([
             'id' => Str::uuid(),
             'site_id' => $site->id,
+            'ai_role_id' => $aiRole->id,
         ]);
 
         return response()->json([
@@ -133,6 +177,7 @@ class WidgetSettingController extends Controller
             'ai_max_tokens' => 'nullable|integer|min:50|max:4000',
             'min_similarity_score' => 'nullable|numeric|min:0|max:1',
             'fallback_message' => 'nullable|string|max:255',
+            'ai_role_id' => 'nullable|string|exists:ai_roles,id',
         ]);
 
         $widgetSetting->update($validated);
