@@ -1,40 +1,35 @@
 <?php
-// app/Services/CrawlService.php
 
 namespace App\Services;
 
-use App\Models\Site;
 use App\Models\Page;
-use App\Models\CrawlJob;
+use App\Models\Site;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use Symfony\Component\HttpClient\HttpClient;
 use Symfony\Component\BrowserKit\HttpBrowser;
 use Symfony\Component\DomCrawler\Crawler;
-use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpClient\HttpClient;
 
 class CrawlService
 {
+    /* ==========================================================
+     | PUBLIC API
+     ========================================================== */
+
     public function prepareQueue(Site $site): array
     {
         $queue = [];
         $visited = [];
 
-        $baseUrl = rtrim($site->url, '/') . '/';
+        $baseUrl  = rtrim($site->url, '/') . '/';
         $baseHost = parse_url($baseUrl, PHP_URL_HOST);
 
-        Log::info("PrepareQueue start: baseUrl={$baseUrl}");
-
-        // Si include_pages fourni → crawl ciblé
         if (!empty($site->include_pages)) {
             foreach ($site->include_pages as $path) {
-                // Si wildcard → on démarre depuis la base
-                if (str_contains($path, '*')) {
-                    $queue[] = ['url' => $baseUrl, 'depth' => 0];
-                    continue;
-                }
-                $resolved = $this->resolveUrl($path, $baseUrl);
-                Log::info("Include page resolved: {$resolved}");
-                $queue[] = ['url' => $resolved, 'depth' => 0];
+                $queue[] = [
+                    'url'   => $this->resolveUrl($path, $baseUrl),
+                    'depth' => 0,
+                ];
             }
         } else {
             $queue[] = ['url' => $baseUrl, 'depth' => 0];
@@ -42,309 +37,284 @@ class CrawlService
 
         $allUrls = [];
 
-        while (!empty($queue)) {
+        while ($queue) {
             $current = array_shift($queue);
-            $url = $current['url'];
-            $depth = $current['depth'];
+            $url     = $this->normalizeUrl($current['url']);
+            $depth   = $current['depth'];
 
-            Log::info("Queue processing: url={$url}, depth={$depth}");
+            if (!$url || $depth > $site->crawl_depth) continue;
+            if (in_array($url, $visited, true)) continue;
 
-            if ($depth > $site->crawl_depth) continue;
+            if ($this->isExcluded($url, $site)) continue;
 
-            $normalizedUrl = $this->normalizeUrl($url);
+            $visited[] = $url;
+            $allUrls[] = ['url' => $url, 'depth' => $depth];
 
-            $skip = false;
-            foreach ($site->exclude_pages ?? [] as $pattern) {
-                if ($this->urlMatchesPattern($normalizedUrl, $pattern)) {
-                    $skip = true; break;
-                }
-            }
-            if ($skip || in_array($normalizedUrl, $visited)) continue;
-
-            $visited[] = $normalizedUrl;
-            $allUrls[] = ['url' => $normalizedUrl, 'depth' => $depth];
-
-            // Extraction mock
-            $links = $this->extractInternalLinksMock($normalizedUrl, $baseHost, $site);
-
-            Log::info("Links found for {$normalizedUrl}: " . implode(', ', $links));
-
-            $allowedPages = $site->include_pages ?? [];
-
-            foreach ($links as $link) {
-                if (
-                    !in_array($link, $visited, true) &&
-                    (empty($allowedPages) || in_array($link, $allowedPages))
-                ) {
+            foreach ($this->extractInternalLinks($url, $baseHost, $site) as $link) {
+                if (!in_array($link, $visited, true)) {
                     $queue[] = ['url' => $link, 'depth' => $depth + 1];
                 }
             }
         }
 
-        Log::info("PrepareQueue end: total urls=" . count($allUrls));
-
         return $allUrls;
     }
-    public function crawlSinglePage(Site $site, string $url, int $depth, ?string $crawlJobId = null): ?Page
-    {
+
+    public function crawlSinglePage(
+        Site $site,
+        string $url,
+        int $depth,
+        ?string $crawlJobId = null
+    ): ?Page {
         try {
-            Log::info("Crawl start: {$url}");
-            $client = new HttpBrowser(HttpClient::create(['timeout' => 60]));
+            $client = new HttpBrowser(HttpClient::create([
+                'timeout' => 60,
+                'headers' => [
+                    'User-Agent' => 'Mozilla/5.0 (compatible; CrawlBot/1.0)',
+                ],
+            ]));
+
             $client->request('GET', $url);
             $crawler = $client->getCrawler();
 
-            $text = $crawler->filter('body')->text('', true);
-            Log::info("Contenu body pour {$url}: " . substr($text, 0, 100)); // les 100 premiers caractères
-            $text = preg_replace('/\s+/', ' ', trim(html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
-            $title = $crawler->filter('title')->count() ? trim(html_entity_decode($crawler->filter('title')->text(), ENT_QUOTES | ENT_HTML5, 'UTF-8')) : '';
+            $title = $crawler->filter('title')->count()
+                ? trim($crawler->filter('title')->text())
+                : '';
+
+            $main = $this->extractBestContent($crawler);
+            if (!$main) return null;
+
+            $this->cleanDom($main);
+
+            $sections = $this->extractStructuredSections($main);
+
+            if (empty($sections)) {
+                $sections = $this->extractLooseSections($main);
+            }
+
+            if (empty($sections)) return null;
 
             return Page::create([
-                'id' => (string) Str::uuid(),
-                'site_id' => $site->id,
-                'crawl_job_id' => $crawlJobId, // <-- ajouter
-                'url' => $url,
-                'title' => $title,
-                'content' => $text,
-                'source' => "crawl"
+                'id'           => (string) Str::uuid(),
+                'site_id'      => $site->id,
+                'crawl_job_id' => $crawlJobId,
+                'url'          => $url,
+                'title'        => $title,
+                'content'      => json_encode($sections, JSON_UNESCAPED_UNICODE),
+                'source'       => 'crawl',
             ]);
+
         } catch (\Throwable $e) {
-            Log::error("Erreur crawl page: {$url}", ['error' => $e->getMessage()]);
+            Log::error("Crawl error {$url}", ['error' => $e->getMessage()]);
             return null;
         }
     }
-    /**
-     * Normalise une URL pour la comparaison.
-     * Exemple de normalisation : suppression des slashs finaux, minuscules pour le host, tri des paramètres (optionnel).
-     *
-     * @param string $url L'URL à normaliser.
-     * @return string L'URL normalisée.
-     */
-    private function normalizeUrl(string $url): string
+
+    /* ==========================================================
+     | CONTENT EXTRACTION
+     ========================================================== */
+
+    private function extractBestContent(Crawler $crawler): ?Crawler
     {
-        // Parser l'URL
-        $components = parse_url($url);
-        if ($components === false) {
-            // Si l'URL est invalide, la retourner telle quelle ou laisser tomber ?
-            // Pour ce cas, on la traite comme une chaîne vide ou on la retourne.
-            // On choisit de la retourner pour ne pas perturber la logique principale.
-            return $url;
-        }
-
-        // Normaliser le scheme et le host en minuscules
-        $scheme = strtolower($components['scheme'] ?? '');
-        $host = strtolower($components['host'] ?? '');
-
-        // Normaliser le path (enlever slash final, nettoyer)
-        $path = $components['path'] ?? '/';
-        $path = $this->normalizePath($path);
-
-        // Reconstituer l'URL
-        $normalized = $scheme . '://' . $host;
-
-        if (isset($components['port'])) {
-            $normalized .= ':' . $components['port'];
-        }
-
-        $normalized .= $path;
-
-        // Ajouter query string si spécifiée (et la normaliser si pertinent, ici on la laisse telle quelle)
-        if (isset($components['query'])) {
-            $normalized .= '?' . $components['query']; // Pour une normalisation avancée, trier les paramètres ici
-        }
-
-        return $normalized;
-    }
-    /**
-     * Normalise un morceau de texte (titre par exemple) pour la comparaison de contenu.
-     *
-     * @param string $str
-     * @return string
-     */
-    private function normalizeContentString(string $str): string
-    {
-        // Convertir en minuscules
-        $str = mb_strtolower($str, 'UTF-8');
-        // Enlever les espaces multiples et trim
-        $str = preg_replace('/\s+/', ' ', trim($str));
-        // Optionnellement, vous pouvez retirer la ponctuation ou les accents ici si pertinent
-        // $str = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $str); // Cela retire les accents
-        return $str;
-    }
-    /**
-     * Résout une URL relative à partir d'une URL de base.
-     * Remplace la logique de UriHttp::resolve.
-     *
-     * @param string $relativeUrl L'URL relative à résoudre.
-     * @param string $baseUrl L'URL de base.
-     * @return string|null L'URL absolue résolue, ou null si elle ne peut pas l'être.
-     */
-    private function resolveUrl(string $relativeUrl, string $baseUrl): ?string
-    {
-        // Si l'URL est déjà absolue (contient un schéma comme http:// ou https://)
-        if (parse_url($relativeUrl, PHP_URL_SCHEME)) {
-            return $relativeUrl;
-        }
-
-        // Si c'est un chemin absolu (/path/to/resource)
-        if (str_starts_with($relativeUrl, '/')) {
-            $baseComponents = parse_url($baseUrl);
-            if ($baseComponents === false) {
-                return null; // URL de base invalide
+        foreach (['main', 'article', '[role="main"]'] as $selector) {
+            if ($crawler->filter($selector)->count()) {
+                return $crawler->filter($selector);
             }
-            $scheme = $baseComponents['scheme'] ?? 'http';
-            $host = $baseComponents['host'] ?? '';
-            $port = isset($baseComponents['port']) ? ':' . $baseComponents['port'] : '';
-            return $scheme . '://' . $host . $port . $relativeUrl;
         }
 
-        // Sinon, c'est un chemin relatif (./path, ../path, path/to/resource)
-        // Calculer le chemin de base à partir de l'URL de base
-        $basePath = dirname(parse_url($baseUrl, PHP_URL_PATH) ?: '/');
-        if ($basePath === '.') {
-            $basePath = '/'; // Si baseUrl est une racine, basePath est '/'
-        }
-        $newPath = $basePath . '/' . $relativeUrl;
+        // Heuristique densité de texte
+        $bestNode  = null;
+        $bestScore = 0;
 
-        // Nettoyer le chemin pour résoudre ./ et ../
-        $newPath = $this->normalizePath($newPath);
+        $crawler->filter('div, section')->each(function (Crawler $node) use (&$bestNode, &$bestScore) {
+            $textLength = mb_strlen(trim($node->text()));
+            $linkCount  = $node->filter('a')->count();
 
-        // Reconstruire l'URL absolue complète
-        $baseComponents = parse_url($baseUrl);
-        if ($baseComponents === false) {
-            return null; // URL de base invalide
-        }
-        $scheme = $baseComponents['scheme'] ?? 'http';
-        $host = $baseComponents['host'] ?? '';
-        $port = isset($baseComponents['port']) ? ':' . $baseComponents['port'] : '';
-        return $scheme . '://' . $host . $port . $newPath;
-    }
-    /**
-     * Normalise un chemin en résolvant ./ et ../
-     *
-     * @param string $path Le chemin à normaliser.
-     * @return string Le chemin normalisé.
-     */
-    private function normalizePath(string $path): string
-    {
-        $parts = explode('/', $path);
-        $normalized = [];
+            if ($textLength < 300) return;
+            if ($linkCount > ($textLength / 100)) return;
 
-        foreach ($parts as $part) {
-            if ($part === '.' || $part === '') {
-                continue; // Ignore le répertoire courant et les segments vides
+            $score = $textLength - ($linkCount * 50);
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $bestNode  = $node;
             }
-            if ($part === '..') {
-                // Remonter d'un niveau : retirer le dernier élément du chemin normalisé
-                array_pop($normalized);
+        });
+
+        return $bestNode ?: ($crawler->filter('body')->count() ? $crawler->filter('body') : null);
+    }
+
+    private function cleanDom(Crawler $crawler): void
+    {
+        $crawler->filter(
+            'script,style,nav,footer,header,aside,form,iframe,button,svg'
+        )->each(fn ($n) =>
+        $n->getNode(0)?->parentNode?->removeChild($n->getNode(0))
+        );
+    }
+
+    /* ==========================================================
+     | SECTION EXTRACTION
+     ========================================================== */
+
+    private function extractStructuredSections(Crawler $content): array
+    {
+        $sections = [];
+        $currentTitle = null;
+        $buffer = [];
+
+        $content->filter('h1,h2,h3,p,li')->each(function (Crawler $node) use (&$sections, &$currentTitle, &$buffer) {
+            $tag = strtolower($node->nodeName());
+
+            if (in_array($tag, ['h1', 'h2', 'h3'])) {
+                if ($currentTitle && $buffer) {
+                    $sections[] = [
+                        'title'   => $currentTitle,
+                        'content' => implode("\n", $buffer),
+                    ];
+                }
+                $currentTitle = trim($node->text());
+                $buffer = [];
+                return;
+            }
+
+            $text = trim($node->text());
+            if (mb_strlen($text) > 40) {
+                $buffer[] = $text;
+            }
+        });
+
+        if ($currentTitle && $buffer) {
+            $sections[] = [
+                'title'   => $currentTitle,
+                'content' => implode("\n", $buffer),
+            ];
+        }
+
+        return $sections;
+    }
+
+    private function extractLooseSections(Crawler $content): array
+    {
+        $text = trim(preg_replace('/\s+/', ' ', $content->text()));
+        if (mb_strlen($text) < 300) return [];
+
+        $sentences = preg_split('/(?<=[.!?])\s+/', $text);
+        $sections = [];
+        $buffer = '';
+
+        foreach ($sentences as $sentence) {
+            if (mb_strlen($buffer) < 800) {
+                $buffer .= ' ' . $sentence;
             } else {
-                // Ajouter le segment au chemin normalisé
-                $normalized[] = $part;
+                $sections[] = [
+                    'title'   => null,
+                    'content' => trim($buffer),
+                ];
+                $buffer = $sentence;
             }
         }
 
-        // Recombiner les parties
-        $result = implode('/', $normalized);
-
-        // Préserver le slash initial si le chemin original en avait un
-        if (str_starts_with($path, '/')) {
-            $result = '/' . $result;
+        if (mb_strlen($buffer) > 200) {
+            $sections[] = [
+                'title'   => null,
+                'content' => trim($buffer),
+            ];
         }
 
-        // Préserver le slash final si le chemin original en avait un
-        if (substr($path, -1) === '/' && substr($result, -1) !== '/') {
-            $result .= '/';
-        }
-
-        return $result;
+        return $sections;
     }
-    /**
-     * Simule l'extraction des liens internes d'une page pour préparer la queue de crawl.
-     * Cette fonction ne fait pas le vrai crawl mais retourne les URLs internes filtrées.
-     *
-     * @param string $url L'URL de la page en cours de traitement
-     * @param string $baseHost Le host du site (ex: example.com)
-     * @param Site $site L'instance du site
-     * @return array Tableau de liens internes à crawler
-     */
-    private function extractInternalLinksMock(string $url, string $baseHost, Site $site): array
+
+    /* ==========================================================
+     | LINK EXTRACTION
+     ========================================================== */
+
+    private function extractInternalLinks(string $url, string $baseHost, Site $site): array
     {
         $links = [];
 
         try {
-            // Initialiser le client HttpBrowser
             $client = new HttpBrowser(HttpClient::create(['timeout' => 30]));
             $client->request('GET', $url);
             $crawler = $client->getCrawler();
 
-            // Extraire tous les liens <a href="">
-            $crawler->filter('a[href]')->each(function ($node) use (&$links, $baseHost, $site) {
+            $crawler->filter('a[href]')->each(function (Crawler $node) use (&$links, $baseHost, $site) {
                 $href = trim($node->attr('href'));
+                if (!$href || preg_match('/^(#|mailto|tel|javascript|data):/i', $href)) return;
 
-                // Ignorer les liens inutiles
-                if (!$href || str_starts_with($href, '#') || preg_match('/^(mailto|tel|javascript|ftp|data):/i', $href)) {
-                    return;
-                }
+                $abs = $this->resolveUrl($href, rtrim($site->url, '/') . '/');
+                if (!$abs) return;
 
-                // Résoudre l'URL relative
-                $absoluteLink = $this->resolveUrl($href, rtrim($site->url, '/') . '/');
-                if (!$absoluteLink) return;
+                if (parse_url($abs, PHP_URL_HOST) !== $baseHost) return;
 
-                $linkHost = parse_url($absoluteLink, PHP_URL_HOST);
+                $norm = $this->normalizeUrl($abs);
+                if ($this->isExcluded($norm, $site)) return;
 
-                // Vérifier que le lien est interne au site
-                if ($linkHost !== $baseHost) return;
-
-                // Normaliser le lien
-                $normalizedLink = $this->normalizeUrl($absoluteLink);
-
-                // Vérifier les règles include_pages si définies
-                if (!empty($site->include_pages)) {
-                    $allowed = false;
-                    foreach ($site->include_pages as $pattern) {
-                        if ($this->urlMatchesPattern($normalizedLink, $pattern)) {
-                            $allowed = true;
-                            break;
-                        }
-                    }
-                    if (!$allowed) return;
-                }
-
-
-                // Vérifier les règles exclude_pages
-                foreach ($site->exclude_pages ?? [] as $pattern) {
-                    if ($this->urlMatchesPattern($normalizedLink, $pattern)) return;
-                }
-
-                // Ajouter le lien si pas déjà présent
-                if (!in_array($normalizedLink, $links, true)) {
-                    $links[] = $normalizedLink;
+                if (!in_array($norm, $links, true)) {
+                    $links[] = $norm;
                 }
             });
         } catch (\Throwable $e) {
-            Log::warning("Impossible d'extraire les liens internes pour {$url}", [
-                'site_id' => $site->id,
-                'error' => $e->getMessage(),
-            ]);
+            Log::warning("Link extraction failed {$url}");
         }
 
         return $links;
     }
+
+    /* ==========================================================
+     | HELPERS
+     ========================================================== */
+
+    private function isExcluded(string $url, Site $site): bool
+    {
+        foreach ($site->exclude_pages ?? [] as $pattern) {
+            if ($this->urlMatchesPattern($url, $pattern)) return true;
+        }
+        return false;
+    }
+
+    private function normalizeUrl(string $url): ?string
+    {
+        $parts = parse_url($url);
+        if (!$parts || empty($parts['host'])) return null;
+
+        $scheme = strtolower($parts['scheme'] ?? 'http');
+        $host   = strtolower($parts['host']);
+        $path   = $this->normalizePath($parts['path'] ?? '/');
+
+        return $scheme . '://' . $host . $path;
+    }
+
+    private function resolveUrl(string $relative, string $base): ?string
+    {
+        if (parse_url($relative, PHP_URL_SCHEME)) return $relative;
+        if (str_starts_with($relative, '/')) {
+            $p = parse_url($base);
+            return "{$p['scheme']}://{$p['host']}{$relative}";
+        }
+        return rtrim($base, '/') . '/' . ltrim($relative, '/');
+    }
+
+    private function normalizePath(string $path): string
+    {
+        $parts = [];
+        foreach (explode('/', $path) as $p) {
+            if ($p === '' || $p === '.') continue;
+            if ($p === '..') array_pop($parts);
+            else $parts[] = $p;
+        }
+        return '/' . implode('/', $parts);
+    }
+
     private function urlMatchesPattern(string $url, string $pattern): bool
     {
-        // Normaliser
-        $url = rtrim($url, '/');
         $pattern = rtrim($pattern, '/');
+        $url     = rtrim($url, '/');
 
-        // Si pattern contient *
         if (str_contains($pattern, '*')) {
-            $escaped = preg_quote($pattern, '#');
-            $regex = '#^' . str_replace('\*', '.*', $escaped) . '$#i';
+            $regex = '#^' . str_replace('\*', '.*', preg_quote($pattern, '#')) . '$#i';
             return (bool) preg_match($regex, $url);
         }
 
-        // Sinon comparaison simple (compatibilité actuelle)
         return $url === $pattern || str_starts_with($url . '/', $pattern . '/');
     }
-
-
 }

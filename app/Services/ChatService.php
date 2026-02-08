@@ -21,7 +21,11 @@ class ChatService
     public function __construct(
         protected EmbeddingService $embeddingService,
         protected SimilarityService $similarityService,
-        protected PromptBuilder $promptBuilder
+        protected PromptBuilder $promptBuilder,
+        protected VectorSearchService $vectorSearchService,
+        protected ChunkHydrationService $chunkHydrationService,
+        protected ChunkRankingService $chunkRankingService,
+        protected ContextBuilder $contextBuilder,
     )
     {}
 
@@ -90,81 +94,36 @@ class ChatService
         $query = $this->normalizeText($question);
 
         // 1️⃣ Embedding de la question
-        $questionEmbedding = $this->embeddingService->getEmbedding($question);
+        $questionEmbedding = $this->embeddingService->getEmbedding($query);
 
-        // 2️⃣ Charger les chunks du site
-        $scored = [];
-
-        Chunk::where('site_id', $site->id)
-            ->whereIn('source_type', ['woocommerce','page','document','sitemap'])
-            ->select(['text', 'embedding'])
-            ->chunk(500, function ($chunks) use (&$scored, $questionEmbedding, &$site) {
-
-                foreach ($chunks as $chunk) {
-                    $score = $this->similarityService->cosine(
-                        $questionEmbedding,
-                        $chunk->embedding
-                    );
-
-                    if ($score >= floatval($site->settings->min_similarity_score)) {
-                        $scored[] = [
-                            'text' => $chunk->text,
-                            'score' => $score,
-                            'priority' => $chunk->priority ?? 100,
-                        ];
-
-                    }
-                    /*if (count($scored) >= 20) {
-                        return false; // stop chunk()
-                    }*/
-
-                }
-            });
-
-        usort($scored, function ($a, $b) {
-            return ($b['score'] <=> $a['score'])
-                ?: ($a['priority'] <=> $b['priority']);
-        });
-
-        $topChunks = array_slice($scored, 0, 5); // ou 3 si tu veux moins
-
-        // 3️⃣ Construire le contexte
-
-        $minRequiredChunks = 1;
-        $minConfidenceScore = floatval($site->settings->min_similarity_score); //0.39 ou 0.45 sont bon aussi
-
-        $validChunks = array_filter($scored, fn ($c) =>
-            $c['score'] >= $minConfidenceScore
+        // 2️⃣ Recherche vectorielle Qdrant
+        $qdrantResults = $this->vectorSearchService->search(
+            embedding: $questionEmbedding,
+            siteId: $site->id,
+            limit: 20,
+            scoreThreshold: floatval($site->settings->min_similarity_score)
         );
 
-        if (count($validChunks) < $minRequiredChunks) {
+        // 3️⃣ Fallback si rien trouvé
+        if (empty($qdrantResults)) {
             UnansweredQuestion::create([
                 'site_id' => $site->id,
                 'question' => $question,
             ]);
 
-            // ⚠️ Fallback HUMAIN (clé de l’illusion)
-            //$context = "Nous n'avons pas communiqué publiquement cette information pour le moment.";
+            //dd(empty($qdrantResults), $qdrantResults, $site->id, floatval($site->settings->min_similarity_score));
             return "Je n’ai pas trouvé cette information dans les données de notre entreprise.
-                    N’hésitez pas à nous préciser votre besoin ou à nous contacter directement.";
-        } else {
-            $context = collect($topChunks)
-                ->pluck('text')
-                ->implode("\n\n---\n\n");
-
-            /*$context = collect(array_slice($scored, 0, 3))
-                ->pluck('text')
-                ->implode("\n\n---\n\n");*/
+            N’hésitez pas à nous préciser votre besoin ou à nous contacter directement.";
         }
 
-        $isSelectionQuestion = preg_match(
-    '/(moins\s+cher|meilleur|choisir|recommander|quel(le)?|compar(er|aison))/i',
-            $question
-        );
-        if ($isSelectionQuestion && empty($validChunks)) {
-            //$context = "Nous proposons plusieurs produits, mais nous ne communiquons pas de classement par prix.";
-            return "Je peux vous expliquer nos offres si vous me précisez votre besoin.";
-        }
+        // 4️⃣ Hydratation MySQL
+        $hydrated = $this->chunkHydrationService->hydrate($qdrantResults);
+
+        // 5️⃣ Ranking final métier
+        $topChunks = $this->chunkRankingService->rank($hydrated, 5);
+
+        // 6️⃣ Construction du contexte
+        $context = $this->contextBuilder->build($topChunks);
 
         if (trim($context) === '') {
             return "Je n’ai pas d’information fiable à ce sujet pour le moment.";

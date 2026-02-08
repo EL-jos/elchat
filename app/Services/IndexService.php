@@ -18,7 +18,8 @@ class IndexService
 
     use TextNormalizer;
     public function __construct(
-        protected EmbeddingService $embeddingService
+        protected EmbeddingService $embeddingService,
+        protected VectorIndexService $vectorIndexService
     ) {}
 
     /**
@@ -26,7 +27,7 @@ class IndexService
      */
     public function indexPage(Page $page, array $context = []): void
     {
-        // 🛑 Idempotence
+        // 🛑 Idempotence  : ne jamais réindexer
         if ($page->is_indexed) {
             return;
         }
@@ -36,22 +37,33 @@ class IndexService
         try {
             $chunks = $this->buildChunks($page);
 
-            foreach ($chunks as $priority => $textChunk) {
-                if ($this->chunkAlreadyExists($page, $textChunk)) {
-                    continue;
-                }
+            foreach ($chunks as $i => $chunkData) {
+                $textChunk = $chunkData['text'];
+                $priority  = $chunkData['priority'];
+
+
+                if ($this->chunkAlreadyExists($page, $textChunk)) continue;
 
                 $embedding = $this->embeddingService->getEmbedding($textChunk);
 
-                Chunk::create([
+                $chunk = Chunk::create([
                     'page_id'     => $page->id,
                     'site_id'     => $page->site_id,
                     'source_type' => $context['source'] ?? $page->source ?? 'unknown',
                     'text'        => $textChunk,
-                    'embedding'   => $embedding,
-                    'priority'    => $priority + 1,
+                    'priority'    => $priority,
                     'document_id' => null,
                 ]);
+
+                $this->vectorIndexService->upsertChunk(
+                    $chunk->id,
+                    $embedding,
+                    [
+                        'site_id'  => $chunk->site_id,
+                        'page_id'  => $chunk->page_id,
+                        'priority' => $priority,
+                    ]
+                );
             }
 
             // ✅ Page marquée indexée SEULEMENT si tout est OK
@@ -82,14 +94,106 @@ class IndexService
     /**
      * Construction des chunks
      */
-    protected function buildChunks(
-        Page $page,
-        int $chunkSize = 500,
-        float $overlapRatio = 0.15
-    ): array {
-        return $this->chunkText($page->content, $chunkSize, $overlapRatio);
+    protected function buildChunks(Page $page): array
+    {
+        // Cas 1 : contenu structuré (JSON depuis CrawlService B)
+        $decoded = json_decode($page->content, true);
+
+        if (is_array($decoded)) {
+            return $this->buildChunksFromSections($page, $decoded);
+        }
+
+        // Cas 2 : contenu brut (fallback robuste)
+        return $this->buildChunksFromRawText($page);
     }
 
+    protected function buildChunksFromSections(Page $page, array $sections): array
+    {
+        $chunks = [];
+
+        foreach ($sections as $sectionIndex => $section) {
+            $sectionTitle = trim($section['title'] ?? '');
+            $content      = trim($section['content'] ?? '');
+
+            if (mb_strlen($content) < 100) continue;
+
+            $contextHeader = implode("\n", array_filter([
+                $page->title ? "Page: {$page->title}" : null,
+                $sectionTitle ? "Section: {$sectionTitle}" : null,
+                "URL: {$page->url}",
+            ]));
+
+            $fullText = $contextHeader . "\n\n" . $content;
+
+            foreach ($this->chunkBySentences($fullText, 800, 120) as $chunkText) {
+                $chunks[] = [
+                    'text' => $chunkText,
+                    'priority' => $this->computePriority($sectionIndex, $sectionTitle),
+                ];
+            }
+        }
+
+        return $chunks;
+    }
+
+    protected function buildChunksFromRawText(Page $page): array
+    {
+        $text = trim($page->content);
+        if (mb_strlen($text) < 300) return [];
+
+        $header = implode("\n", array_filter([
+            $page->title ? "Page: {$page->title}" : null,
+            "URL: {$page->url}",
+        ]));
+
+        $chunks = [];
+        foreach ($this->chunkBySentences($header . "\n\n" . $text, 800, 120) as $chunkText) {
+            $chunks[] = [
+                'text' => $chunkText,
+                'priority' => 50, // fallback priority neutre
+            ];
+        }
+
+        return $chunks;
+    }
+
+    protected function chunkBySentences(string $text, int $maxChars, int $overlapChars): array
+    {
+        $sentences = preg_split('/(?<=[.!?])\s+/', $text);
+        $chunks    = [];
+        $buffer    = '';
+
+        foreach ($sentences as $sentence) {
+            if (mb_strlen($buffer . ' ' . $sentence) <= $maxChars) {
+                $buffer .= ' ' . $sentence;
+            } else {
+                $chunks[] = trim($buffer);
+                $buffer = mb_substr($buffer, -$overlapChars) . ' ' . $sentence;
+            }
+        }
+
+        if (mb_strlen($buffer) > 200) {
+            $chunks[] = trim($buffer);
+        }
+
+        return $chunks;
+    }
+
+    /**
+     * Calcul de la priorité d'un chunk
+     */
+    protected function computePriority(int $sectionIndex, ?string $title): int
+    {
+        $score = 50; // valeur neutre par défaut
+
+        if ($sectionIndex === 0) $score += 20;
+        if ($title) $score += 10;
+        if (preg_match('/faq|question|help|guide/i', $title ?? '')) {
+            $score += 20;
+        }
+
+        return $score;
+    }
     /**
      * Déduplication par hash
      */
@@ -124,15 +228,16 @@ class IndexService
     }
 
     /**
-     * For Document
+     * Indexe un document (PDF, Word, TXT)
      */
-
     public function indexDocument(Document $document, array $context = []): void
     {
+        $siteId = $document->documentable->site->id ?? null;
+
         // 1️⃣ Extraction du texte
         $text = $this->extractTextFromDocument($document->path, $document->extension);
 
-        if (strlen($text) < 50) {
+        if (mb_strlen($text) < 50) {
             Log::info("Document trop court, ignoré: {$document->path}");
             return;
         }
@@ -140,27 +245,66 @@ class IndexService
         DB::beginTransaction();
 
         try {
-            $chunks = $this->chunkText($text, 500, 0.15);
+            // 2️⃣ Construction des chunks intelligents
+            $chunks = $this->chunkBySentencesWithMetadata(
+                $text,
+                $document->name ?? basename($document->path),
+                $document->id,
+                $siteId,
+                800, // max chars
+                120  // overlap
+            );
 
-            foreach ($chunks as $priority => $textChunk) {
+            // 3️⃣ Insertion et vectorisation
+            foreach ($chunks as $chunkData) {
+                $textChunk = $chunkData['text'];
+                $priority  = $chunkData['priority'];
+                $metadata  = $chunkData['metadata'];
+
                 if ($this->chunkAlreadyExistsForDocument($document, $textChunk)) {
                     continue;
                 }
 
-                $embedding = $this->embeddingService->getEmbedding($textChunk);
+                try {
+                    $embedding = $this->embeddingService->getEmbedding($textChunk);
+                } catch (\Throwable $e) {
+                    Log::warning("Embedding échoué pour document {$document->id}", [
+                        'chunk_preview' => mb_substr($textChunk, 0, 100),
+                        'error' => $e->getMessage(),
+                    ]);
+                    continue; // on skip ce chunk mais pas tout le document
+                }
 
-                Chunk::create([
-                    'page_id'     => null, // pas lié à une page
-                    'site_id'     => $document->documentable->site->id ?? null,
+                $chunk = Chunk::create([
+                    'page_id'     => null,
+                    'site_id'     => $siteId,
                     'document_id' => $document->id,
                     'source_type' => 'document',
                     'text'        => $textChunk,
-                    'embedding'   => $embedding,
-                    'priority'    => $priority + 1,
+                    'priority'    => $priority,
+                    'metadata'    => $metadata,
                 ]);
+
+                $this->vectorIndexService->upsertChunk(
+                    $chunk->id,
+                    $embedding,
+                    array_merge([
+                        'site_id'     => $chunk->site_id,
+                        'page_id'     => $chunk->page_id,
+                        'document_id' => $chunk->document_id,
+                        'source_type' => $chunk->source_type,
+                        'priority'    => $chunk->priority,
+                    ], $metadata)
+                );
             }
 
             DB::commit();
+
+            Log::info("Document indexé: {$document->path}", [
+                'chunks_count' => count($chunks),
+                'document_id'  => $document->id,
+            ]);
+
         } catch (\Throwable $e) {
             DB::rollBack();
             Log::error("Indexation document échouée: {$document->path}", [
@@ -168,6 +312,59 @@ class IndexService
             ]);
             throw $e;
         }
+    }
+    /**
+     * Découpe un texte en chunks intelligents avec metadata et overlap
+     */
+    protected function chunkBySentencesWithMetadata(
+        string $text,
+        string $documentName,
+        string $documentId,
+        ?string $siteId,
+        int $maxChars,
+        int $overlapChars
+    ): array {
+        $sentences = preg_split('/(?<=[.!?])\s+/', trim($text));
+        $chunks = [];
+        $buffer = '';
+        $chunkIndex = 0;
+
+        foreach ($sentences as $sentence) {
+            $sentence = trim($sentence);
+            if (empty($sentence)) continue;
+
+            if (mb_strlen($buffer . ' ' . $sentence) <= $maxChars) {
+                $buffer .= ' ' . $sentence;
+            } else {
+                $chunks[] = [
+                    'text' => trim($buffer),
+                    'priority' => 50 + $chunkIndex, // priorité progressive
+                    'metadata' => [
+                        'document_name' => $documentName,
+                        'document_id'   => $documentId,
+                        'site_id'       => $siteId,
+                        'chunk_index'   => $chunkIndex,
+                    ],
+                ];
+                $buffer = mb_substr($buffer, -$overlapChars) . ' ' . $sentence;
+                $chunkIndex++;
+            }
+        }
+
+        if (mb_strlen(trim($buffer)) > 50) {
+            $chunks[] = [
+                'text' => trim($buffer),
+                'priority' => 50 + $chunkIndex,
+                'metadata' => [
+                    'document_name' => $documentName,
+                    'document_id'   => $documentId,
+                    'site_id'       => $siteId,
+                    'chunk_index'   => $chunkIndex,
+                ],
+            ];
+        }
+
+        return $chunks;
     }
 
     protected function chunkAlreadyExistsForDocument(Document $document, string $text): bool
@@ -178,7 +375,6 @@ class IndexService
             ->whereRaw('SHA1(text) = ?', [$hash])
             ->exists();
     }
-
     /**
      * Extraction du texte selon type
      */
@@ -190,12 +386,9 @@ class IndexService
             'pdf' => $this->extractTextFromPDF($fullPath),
             'doc', 'docx' => $this->extractTextFromWord($fullPath),
             'txt' => file_get_contents($fullPath),
-            'csv' => $this->extractTextFromCSV($fullPath),
-            'xls', 'xlsx' => $this->extractTextFromExcel($fullPath),
             default => '',
         };
     }
-
     protected function extractTextFromPDF(string $fullPath): string
     {
         if (!file_exists($fullPath)) return '';
@@ -231,187 +424,15 @@ class IndexService
             return '';
         }
     }
-    protected function extractTextFromExcel(string $fullPath): string
-    {
-        if (!file_exists($fullPath)) return '';
-
-        try {
-            $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($fullPath);
-            $text = '';
-
-            foreach ($spreadsheet->getAllSheets() as $sheet) {
-                foreach ($sheet->toArray() as $row) {
-                    $text .= implode(' ', $row) . ' ';
-                }
-            }
-
-            return trim($text);
-        } catch (\Throwable $e) {
-            Log::error("Erreur extraction Excel: {$fullPath}", ['error' => $e->getMessage()]);
-            return '';
-        }
-    }
-    protected function extractTextFromCSV(string $fullPath): string
-    {
-        if (!file_exists($fullPath)) return '';
-
-        $text = '';
-        try {
-            if (($handle = fopen($fullPath, 'r')) !== false) {
-                while (($data = fgetcsv($handle, 0, ",")) !== false) {
-                    $text .= implode(' ', $data) . ' ';
-                }
-                fclose($handle);
-            }
-        } catch (\Throwable $e) {
-            Log::error("Erreur extraction CSV: {$fullPath}", ['error' => $e->getMessage()]);
-        }
-
-        return trim($text);
-    }
     protected function extractTextFromTXT(string $fullPath): string
     {
         if (!file_exists($fullPath)) return '';
         return trim(file_get_contents($fullPath));
     }
+
     /**
-     * Indexe un document WooCommerce CSV/Excel
+     * Indexe un produit standard dans un document
      */
-    public function indexWooCommerceDocument(Document $document): void
-    {
-        $fullPath = public_path($document->path);
-        $extension = strtolower($document->extension);
-
-        $products = $this->parseWooCommerceFile($fullPath, $extension);
-
-        if (empty($products)) {
-            Log::info("Aucun produit trouvé dans le document: {$document->path}");
-            return;
-        }
-
-        foreach ($products as $priority => $product) {
-            try {
-
-                $sku = $product['sku'] ?? null;
-
-                // 1️⃣ Chunk global
-                $parts = [];
-                foreach ($product as $key => $value) {
-                    if ($value) $parts[] = ucfirst(str_replace('_',' ',$key)) . ": " . $value;
-                }
-                $textGlobal = implode(". ", $parts) . ".";
-
-                $embeddingGlobal = $this->embeddingService->getEmbedding($textGlobal);
-                $titleEmbedding = !empty($product['post_title'])
-                    ? $this->embeddingService->getEmbedding($product['post_title'])
-                    : null;
-
-                $priceText = (!empty($product['regular_price']) || !empty($product['sale_price']))
-                    ? 'Prix régulier: ' . ($product['regular_price'] ?? '') .
-                    ', Prix promo: ' . ($product['sale_price'] ?? '')
-                    : null;
-
-                $priceEmbedding = $priceText
-                    ? $this->embeddingService->getEmbedding($priceText)
-                    : null;
-
-                DB::beginTransaction();
-                if ($this->chunkAlreadyExistsForDocument($document, $textGlobal)) {
-                    DB::rollBack();
-                    continue;
-                }
-
-
-                Chunk::create([
-                    'page_id'     => null,
-                    'site_id'     => $document->documentable->id,
-                    'document_id' => $document->id,
-                    'source_type' => 'woocommerce',
-                    'text'        => $textGlobal,
-                    'embedding'   => $embeddingGlobal,
-                    'priority'    => $priority + 1,
-                    'metadata'    => $product,
-                ]);
-
-                // 2️⃣ Chunks spécifiques pour infos clés
-                if (!empty($product['post_title'])) {
-                    Chunk::create([
-                        'page_id'     => null,
-                        'site_id'     => $document->documentable->id,
-                        'document_id' => $document->id,
-                        'source_type' => 'woocommerce',
-                        'text'        => 'Titre: ' . $product['post_title'],
-                        'embedding'   => $titleEmbedding,
-                        'priority'    => $priority + 1,
-                        'metadata'    => ['type' => 'title', 'sku' => $sku],
-                    ]);
-                }
-
-                if (!empty($product['regular_price']) || !empty($product['sale_price'])) {
-
-                    Chunk::create([
-                        'page_id'     => null,
-                        'site_id'     => $document->documentable->id,
-                        'document_id' => $document->id,
-                        'source_type' => 'woocommerce',
-                        'text'        => $priceText,
-                        'embedding'   => $priceEmbedding,
-                        'priority'    => $priority + 1,
-                        'metadata'    => ['type' => 'price', 'sku' => $sku],
-                    ]);
-                }
-
-                DB::commit();
-                //Log::info("Document WooCommerce indexé avec " . count($products) . " produits: {$document->path}");
-                Log::info("Produit WooCommerce indexé", ['sku' => $sku]);
-
-            } catch (Throwable $e) {
-                DB::rollBack();
-                Log::error("Indexation document WooCommerce échouée: {$document->path}", [
-                    'error' => $e->getMessage()
-                ]);
-                continue;
-                //throw $e;
-            }
-        }
-
-
-    }
-    /**
-     * Parse CSV / Excel WooCommerce
-     */
-    protected function parseWooCommerceFile(string $fullPath, string $extension): array
-    {
-        if (!file_exists($fullPath)) return [];
-
-        $products = [];
-
-        try {
-            if (in_array($extension, ['xls','xlsx'])) {
-                $spreadsheet = IOFactory::load($fullPath);
-                foreach ($spreadsheet->getAllSheets() as $sheet) {
-                    $rows = $sheet->toArray();
-                    $headers = array_map('strtolower', array_shift($rows));
-                    foreach ($rows as $row) {
-                        $products[] = array_combine($headers, $row);
-                    }
-                }
-            } elseif ($extension === 'csv') {
-                if (($handle = fopen($fullPath, 'r')) !== false) {
-                    $headers = fgetcsv($handle, 0, ",");
-                    $headers = array_map('strtolower', $headers);
-                    while (($row = fgetcsv($handle, 0, ",")) !== false) {
-                        $products[] = array_combine($headers, $row);
-                    }
-                    fclose($handle);
-                }
-            }
-        } catch (Throwable $e) {
-            Log::error("Erreur parsing WooCommerce file: {$fullPath}", ['error' => $e->getMessage()]);
-        }
-
-        return $products;
-    }
     public function indexStandardProduct(array $product, Document $document, int $priority): void
     {
         $productIndex = $priority + 1;
@@ -425,9 +446,7 @@ class IndexService
             return;
         }
 
-        $identifier = $product['product_name']
-            ?? $product['product_reference']
-            ?? 'unknown-product';
+        $identifier = $product['product_name'] ?? $product['product_reference'] ?? 'unknown-product';
 
         Log::info('Indexation produit démarrée', [
             'document_id'   => $document->id,
@@ -435,109 +454,166 @@ class IndexService
             'identifier'    => $identifier,
         ]);
 
-        // 🔹 Séparateurs dynamiques (virgule, point-virgule, pipe)
-        $splitValues = function (string $value): array {
-            $value = trim($value);
-            if ($value === '') return [];
-            return array_map('trim', preg_split('/[,;|]/', $value));
-        };
+        DB::beginTransaction();
 
-        $chunksToCreate = [];
+        try {
+            $chunksToCreate = [];
 
-        // 1️⃣ Chunk global (contexte complet)
-        $parts = [];
-        foreach ($product as $key => $value) {
-            if ($value) {
-                $parts[] = ucfirst(str_replace('_', ' ', $key)) . ": " . $value;
-            }
-        }
-
-        $globalText = implode(". ", $parts) . ".";
-
-        if (!$this->chunkAlreadyExistsForDocument($document, $globalText)) {
-            $chunksToCreate[] = [
-                'text'     => $globalText,
-                'priority' => $productIndex,
-                'metadata' => [
-                    'type' => 'global',
-                    'identifier' => $identifier,
-                    'product_index' => $productIndex,
-                    'raw' => $product,
-                ],
-            ];
-        }
-
-        // 2️⃣ Chunks granulaires par champ / variante avec synonymes
-        foreach ($product as $key => $value) {
-            if (!$value) continue;
-
-            foreach ($splitValues($value) as $v) {
-                if ($v === '') continue;
-
-                // 🔹 Récupération des alias + synonymes
-                $aliases = $this->generateStatisticalAliases(
-                    str_replace('_', ' ', $key),
-                    $v
-                );
-
-                foreach ($aliases as $aliasText) {
-                    if ($this->chunkAlreadyExistsForDocument($document, $aliasText)) {
-                        continue;
-                    }
-
-                    // 🔹 Filtrage des alias trop courts
-                    if (strlen($aliasText) < 3) continue;
-                    if (str_word_count($aliasText) === 1 && strlen($aliasText) < 4) continue;
-
-                    $embedding = $this->embeddingService->getEmbedding($aliasText);
-
-                    Chunk::create([
-                        'document_id' => $document->id,
-                        'site_id'     => $document->documentable->id,
-                        'source_type' => 'woocommerce',
-                        'text'        => $aliasText,
-                        'embedding'   => $embedding,
-                        'priority'    => $productIndex + 10,
-                        'metadata'    => [
-                            'type' => 'statistical_alias',
-                            'field' => $key,
-                            'value' => $v,
-                            'product_index' => $productIndex,
-                        ],
-                    ]);
+            // 🔹 1️⃣ Chunk global (contexte complet)
+            $parts = [];
+            foreach ($product as $key => $value) {
+                if ($value) {
+                    $parts[] = ucfirst(str_replace('_', ' ', $key)) . ": " . $value;
                 }
             }
-        }
 
-        // 3️⃣ Création des chunks globaux
-        foreach ($chunksToCreate as $chunk) {
-            $embedding = $this->embeddingService->getEmbedding($chunk['text']);
+            $globalText = implode(". ", $parts) . ".";
 
-            Chunk::create([
-                'document_id' => $document->id,
-                'site_id'     => $document->documentable->id,
-                'source_type' => 'woocommerce',
-                'text'        => $chunk['text'],
-                'embedding'   => $embedding,
-                'metadata'    => $chunk['metadata'],
-                'priority'    => $chunk['priority'],
+            if (!$this->chunkAlreadyExistsForDocument($document, $globalText)) {
+                $chunksToCreate[] = [
+                    'text'     => $globalText,
+                    'priority' => $productIndex,
+                    'metadata' => [
+                        'type' => 'global',
+                        'identifier' => $identifier,
+                        'product_index' => $productIndex,
+                        'raw' => $product,
+                    ],
+                ];
+            }
+
+            // 🔹 2️⃣ Chunks granulaires avec alias et synonymes
+            $splitValues = fn(string $value): array => array_filter(array_map('trim', preg_split('/[,;|]/', trim($value))));
+
+            foreach ($product as $field => $value) {
+                if (!$value) continue;
+
+                foreach ($splitValues($value) as $v) {
+                    if ($v === '') continue;
+
+                    $aliases = $this->generateStatisticalAliases(str_replace('_', ' ', $field), $v);
+
+                    foreach ($aliases as $aliasText) {
+                        if (strlen($aliasText) < 3) continue;
+                        if (str_word_count($aliasText) === 1 && strlen($aliasText) < 4) continue;
+                        if ($this->chunkAlreadyExistsForDocument($document, $aliasText)) continue;
+
+                        try {
+                            $embedding = $this->embeddingService->getEmbedding($aliasText);
+                        } catch (\Throwable $e) {
+                            Log::warning("Embedding échoué pour chunk produit", [
+                                'document_id' => $document->id,
+                                'product_index' => $productIndex,
+                                'chunk_preview' => mb_substr($aliasText, 0, 100),
+                                'error' => $e->getMessage(),
+                            ]);
+                            continue;
+                        }
+
+                        $chunk = Chunk::create([
+                            'document_id' => $document->id,
+                            'site_id'     => $document->documentable->id,
+                            'source_type' => 'woocommerce',
+                            'text'        => $aliasText,
+                            'priority'    => $productIndex + 10,
+                            'metadata'    => [
+                                'type' => 'statistical_alias',
+                                'field' => $field,
+                                'value' => $v,
+                                'identifier' => $identifier,
+                                'product_index' => $productIndex,
+                            ],
+                        ]);
+
+                        if ($chunk) {
+                            $this->vectorIndexService->upsertChunk(
+                                $chunk->id,
+                                $embedding,
+                                [
+                                    'site_id'     => $chunk->site_id,
+                                    'page_id'     => $chunk->page_id,
+                                    'document_id' => $chunk->document_id,
+                                    'source_type' => $chunk->source_type,
+                                    'priority'    => $chunk->priority,
+                                ]
+                            );
+                        }
+                    }
+                }
+            }
+
+            // 🔹 3️⃣ Création des chunks globaux
+            foreach ($chunksToCreate as $chunkData) {
+                try {
+                    $embedding = $this->embeddingService->getEmbedding($chunkData['text']);
+                } catch (\Throwable $e) {
+                    Log::warning("Embedding échoué pour chunk global produit", [
+                        'document_id' => $document->id,
+                        'chunk_preview' => mb_substr($chunkData['text'], 0, 100),
+                        'error' => $e->getMessage(),
+                    ]);
+                    continue;
+                }
+
+                $chunk = Chunk::create([
+                    'document_id' => $document->id,
+                    'site_id'     => $document->documentable->id,
+                    'source_type' => 'woocommerce',
+                    'text'        => $chunkData['text'],
+                    'metadata'    => $chunkData['metadata'],
+                    'priority'    => $chunkData['priority'],
+                ]);
+
+                if ($chunk) {
+                    $this->vectorIndexService->upsertChunk(
+                        $chunk->id,
+                        $embedding,
+                        [
+                            'site_id'     => $chunk->site_id,
+                            'page_id'     => $chunk->page_id,
+                            'document_id' => $chunk->document_id,
+                            'source_type' => $chunk->source_type,
+                            'priority'    => $chunk->priority,
+                        ]
+                    );
+                }
+            }
+
+            DB::commit();
+
+            Log::info('Produit indexé avec succès', [
+                'document_id'    => $document->id,
+                'product_index'  => $productIndex,
+                'identifier'     => $identifier,
+                'chunks_created' => count($chunksToCreate),
             ]);
-        }
 
-        Log::info('Produit indexé avec succès', [
-            'document_id'    => $document->id,
-            'product_index'  => $productIndex,
-            'identifier'     => $identifier,
-            'chunks_created' => count($chunksToCreate),
-        ]);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error("Indexation produit échouée", [
+                'document_id' => $document->id,
+                'product_index' => $productIndex,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
     }
     /**
-     * 🔹 Nouvelle version de generateStatisticalAliases
+     * Détecte si le produit a déjà été indexé
+     */
+    protected function productAlreadyIndexed(Document $document, int $productIndex): bool
+    {
+        return Chunk::where('document_id', $document->id)
+            ->where('source_type', 'woocommerce')
+            ->where('metadata->product_index', $productIndex)
+            ->exists();
+    }
+    /**
+     * Génère des alias et synonymes pour un champ produit
      */
     protected function generateStatisticalAliases(string $label, string $value): array
     {
         $aliases = [];
-
         $label = $this->normalizeText($label);
         $value = $this->normalizeText($value);
 
@@ -552,14 +628,13 @@ class IndexService
             if (strlen($token) >= 3) $aliases[] = $token;
         }
 
-        // 🔹 Synonymes humains depuis field_synonyms
+        // Synonymes depuis FieldSynonym
         $synonyms = FieldSynonym::where('field_key', $label)
-            //->where('language', 'fr')
             ->pluck('synonym')
             ->toArray();
 
         if (!empty($synonyms)) {
-            shuffle($synonyms); // varier les synonymes
+            shuffle($synonyms);
             $count = min(max(5, rand(5, 7)), count($synonyms));
             $selectedSynonyms = array_slice($synonyms, 0, $count);
 
@@ -570,16 +645,6 @@ class IndexService
         }
 
         return array_unique($aliases);
-    }
-
-    protected function productAlreadyIndexed(
-        Document $document,
-        int $productIndex
-    ): bool {
-        return Chunk::where('document_id', $document->id)
-            ->where('source_type', 'woocommerce')
-            ->where('metadata->product_index', $productIndex)
-            ->exists();
     }
 
 }
