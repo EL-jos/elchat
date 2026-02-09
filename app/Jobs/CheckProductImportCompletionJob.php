@@ -42,7 +42,7 @@ class CheckProductImportCompletionJob implements ShouldQueue
                 'import_id' => $import->id,
                 'site_id' => $import->site_id,
             ]);
-
+            $import->site->update(['status' => 'ready']); // on débloque le site
             return;
         }
 

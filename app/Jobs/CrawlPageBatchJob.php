@@ -42,6 +42,11 @@ class CrawlPageBatchJob implements ShouldQueue
 
             if (!$crawlJob) continue;
 
+            if ($crawlService->isExcluded($crawlJob->page_url, $site)) {
+                $crawlJob->update(['status' => 'done']);
+                continue;
+            }
+
             $crawlJob->update(['status' => 'processing']);
 
             try {

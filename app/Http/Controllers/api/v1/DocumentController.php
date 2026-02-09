@@ -27,22 +27,19 @@ class DocumentController extends Controller
         if ($request->hasFile('file')) {
             $files = $request->file('file');
             $document = $this->saveDocument($files, $site, 'file');
-            if ($request->input('mapping') !== null) {
-                $mapping = json_decode($request->mapping, true, 512, JSON_THROW_ON_ERROR);
-            }
+            $mapping = $request->input('mapping') ? json_decode($request->mapping, true, 512, JSON_THROW_ON_ERROR) : [];
 
 
             Log::info("Document uploadé: {$document->path}");
 
+            // Dispatch indexation
+            $site->update(['status' => 'indexing']); // site en cours d'indexation
+
             // Dispatch indexation (support WooCommerce inclus)
-            if($document->extension === 'csv' || $document->extension === 'xlsx' || $document->extension === 'xls') {
-                ProductImportJob::dispatch(
-                    $document,
-                    $mapping,
-                    $site
-                );
-            }else{
-                IndexDocumentJob::dispatch($document);
+            if (in_array($document->extension, ['csv', 'xls', 'xlsx'])) {
+                ProductImportJob::dispatch($document, $mapping, $site);
+            } else {
+                IndexDocumentJob::dispatch($document ,$site); // documents standards
             }
 
             return response()->json([

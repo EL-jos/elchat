@@ -9,6 +9,7 @@ use App\Models\ProductImport;
 use App\Models\Site;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Log;
 
 class ProductImportJob implements ShouldQueue
 {
@@ -35,6 +36,12 @@ class ProductImportJob implements ShouldQueue
 
         $products = ProductMapper::map($productsRaw, $this->mapping);
 
+        if (empty($products)) {
+            Log::warning("Aucun produit trouvé pour document {$this->document->id}");
+            $this->site->update(['status' => 'ready']);
+            return;
+        }
+
         $existing = ProductImport::where('document_id', $this->document->id)
             ->where('status', 'processing')
             ->first();
@@ -52,6 +59,7 @@ class ProductImportJob implements ShouldQueue
             'started_at' => now()
         ]);
 
+        // Dispatch des batches
         collect($products)
             ->chunk(100) // 🔥 batch size configurable
             ->each(function ($batch) use ($import) {
@@ -62,9 +70,8 @@ class ProductImportJob implements ShouldQueue
                 );
             });
 
-        CheckProductImportCompletionJob::dispatch($import->id)->delay(now()->addMinutes(1));
-
-        $this->site->update(['status' => 'indexing']);
+        // Vérification périodique
+        CheckProductImportCompletionJob::dispatch($import->id)->delay(now()->addSeconds(30));
 
     }
 }

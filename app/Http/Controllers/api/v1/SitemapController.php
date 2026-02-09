@@ -27,10 +27,10 @@ class SitemapController extends Controller
             $sitemap = $this->saveDocument($files, $site, 'file');
         }
 
-        dispatch(new ProcessSitemapJob(
-            site: $site,
-            sitemapPath: $sitemap
-        ));
+        ProcessSitemapJob::dispatch(
+            siteId: $site->id,
+            sitemapDocumentId: $sitemap->id
+        );
 
         $site->update([
             'status' => 'crawling',

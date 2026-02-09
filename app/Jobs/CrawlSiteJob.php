@@ -46,6 +46,7 @@ class CrawlSiteJob implements ShouldQueue
                 'site_id' => $site->id,
                 'page_url' => $item['url'],
                 'status' => 'pending',
+                'source' => 'crawl'
             ]);
         }
 

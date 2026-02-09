@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Document;
+use App\Models\Site;
 use App\Services\IndexService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -16,18 +17,19 @@ class IndexDocumentJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public function __construct(protected Document $document) {}
+    public function __construct(protected Document $document, protected Site $site) {}
 
     public function handle(IndexService $indexService)
     {
 
-        /*if (in_array($this->document->extension, ['csv','xls','xlsx'])) {
-            $indexService->indexWooCommerceDocument($this->document);
-        } else {*/
-            $indexService->indexDocument($this->document);
-        //}
+        $indexService->indexDocument($this->document);
 
         Log::info("Document indexé: {$this->document->path}");
+
+        // Document indexé, site prêt
+        $this->site->update([
+            'status' => 'ready',
+        ]);
     }
 
     public function failed(Throwable $e)

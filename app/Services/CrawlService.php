@@ -66,6 +66,15 @@ class CrawlService
         int $depth,
         ?string $crawlJobId = null
     ): ?Page {
+
+        // 🔒 RÈGLE ABSOLUE : jamais scrapper une page exclue
+        if ($this->isExcluded($url, $site)) {
+            Log::info("URL exclue ignorée (no scrape): {$url}", [
+                'site_id' => $site->id,
+            ]);
+            return null;
+        }
+
         try {
             $client = new HttpBrowser(HttpClient::create([
                 'timeout' => 60,
@@ -264,7 +273,7 @@ class CrawlService
      | HELPERS
      ========================================================== */
 
-    private function isExcluded(string $url, Site $site): bool
+    public function isExcluded(string $url, Site $site): bool
     {
         foreach ($site->exclude_pages ?? [] as $pattern) {
             if ($this->urlMatchesPattern($url, $pattern)) return true;

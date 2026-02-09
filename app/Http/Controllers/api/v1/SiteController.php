@@ -79,29 +79,6 @@ class SiteController extends Controller
             'favicon' => $this->getGoogleFaviconSecure($validated['url']),
         ]);
 
-        // 🔹 Détermination automatique du rôle IA selon le type de site
-        $typeId = $site->type->id;
-
-        $role = match (true) {
-            in_array($typeId, [
-                '22222222-2222-4222-8222-222222222222',
-                '44444444-4444-4444-8444-444444444444',
-                '55555555-5555-4555-8555-555555555555']) => AIRole::where('name', 'Commercial')->first(),
-            in_array($typeId, [
-                '66666666-6666-4666-8666-666666666666',
-                'cccccccc-cccc-4ccc-8ccc-cccccccccccc']) => AIRole::where('name', 'Support')->first(),
-            in_array($typeId, [
-                '77777777-7777-4777-8777-777777777777',
-                '14141414-1414-4141-8141-141414141414']) => AIRole::where('name', 'Professeur')->first(),
-            in_array($typeId, [
-                '99999999-9999-4999-8999-999999999999',
-                '33333333-3333-4333-8333-333333333333']) => AIRole::where('name', 'Journaliste')->first(),
-            default => AIRole::where('is_default', true)->first(), // fallback Neutre
-        };
-
-        // 🔹 Assigner le rôle IA au site
-        $site->update(['ai_role_id' => $role?->id]);
-
         return response()->json($site->load('type'), 201);
     }
     /**
