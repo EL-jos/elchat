@@ -4,6 +4,7 @@ set_time_limit(0);
 
 use App\Http\Controllers\api\v1\AIRoleController;
 use App\Http\Controllers\api\v1\ChatController;
+use App\Http\Controllers\api\v1\ChunkController;
 use App\Http\Controllers\api\v1\ConversationController;
 use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\api\v1\DocumentController;
@@ -41,8 +42,9 @@ Route::prefix('v1')->group(function () {
             Route::get('site/{siteId}/pages/overview', 'pagesOverview');
             Route::get('site/{site}/widget-test', 'widgetTest');
             Route::get('/site/{site_id}/widget/config', 'widgetConfig');
-            Route::post('/site/sitemap', [SiteController::class, 'generateSitemap']);
+            Route::post('/site/sitemap', 'generateSitemap');
             Route::post('/knowledge-quality/calculate', 'calculateKnowledgeQuality');
+            //Route::post('/api/products/{productIndex}/reindex', 'reindexProducts');
         });
         Route::post('/chat/ask', [ChatController::class, 'ask']);
         Route::apiResource('conversation', ConversationController::class)->except(['store', 'update', 'destroy']);
@@ -58,6 +60,10 @@ Route::prefix('v1')->group(function () {
             Route::get('site/{site}/widget/setting', 'index');
         });
         Route::apiResource('ai_role', AIRoleController::class);
+        Route::controller(ChunkController::class)->group(function () {
+            Route::get('chunk/{site}/products', 'indexProducts');
+            Route::post('chunk/product/{site}/{document_id}/{product_index}/reindex', 'reindexProduct');
+        });
     });
     Route::controller(SiteController::class)->group(function () {
         Route::get('/site/{site_id}/widget/config', 'widgetConfig');

@@ -46,4 +46,54 @@ class VectorIndexService
             ]);
         }
     }
+
+    public function deleteChunk(string $chunkId): void
+    {
+        try {
+            Http::timeout(5)->post(
+                "{$this->endpoint}/collections/{$this->collection}/points/delete",
+                [
+                    'points' => [$chunkId],
+                ]
+            );
+
+            Log::info('Qdrant delete success', [
+                'chunk_id' => $chunkId,
+            ]);
+
+        } catch (\Throwable $e) {
+
+            // ⚠️ On log mais on ne casse PAS la transaction
+            Log::error('Qdrant delete failed', [
+                'chunk_id' => $chunkId,
+                'error'    => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Suppression multiple chunks en batch
+     */
+    public function deleteChunksBatch(array $chunkIds): void
+    {
+        if (empty($chunkIds)) return;
+
+        try {
+            Http::timeout(10)->post(
+                "{$this->endpoint}/collections/{$this->collection}/points/delete",
+                ['points' => $chunkIds]
+            );
+
+            Log::info('Qdrant batch delete success', [
+                'deleted_count' => count($chunkIds),
+            ]);
+
+        } catch (\Throwable $e) {
+            Log::error('Qdrant batch delete failed', [
+                'chunk_ids_count' => count($chunkIds),
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
 }

@@ -558,7 +558,6 @@ class SiteController extends Controller
         ], 202);
 
     }
-
     public function calculateKnowledgeQuality(Request $request){
 
         $validator = Validator::make($request->all(), [
@@ -579,4 +578,6 @@ class SiteController extends Controller
                 : "Recalcul du KQI pour tous les sites lancé."
         ]);
     }
+
+    
 }
