@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\api\v1;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\IndexDocumentJob;
-use App\Jobs\ProductImportJob;
+use App\Jobs\document\IndexDocumentJob;
+use App\Jobs\product\ProductImportJob;
 use App\Models\Document;
 use App\Models\Site;
 use Illuminate\Http\Request;
@@ -90,57 +90,4 @@ class DocumentController extends Controller
 
         return $document;
     }
-
-    /**
-     * Liste des documents pour un site
-     */
-    /*public function index(Site $site)
-    {
-        $documents = $site->documents()->orderBy('priority')->get();
-
-        return response()->json([
-            'success' => true,
-            'documents' => $documents,
-        ]);
-    }*/
-
-    /**
-     * Récupérer un document (download)
-     */
-    /*public function show(Document $document)
-    {
-        if (!Storage::disk('public')->exists($document->path)) {
-            return response()->json(['error' => 'Fichier introuvable'], 404);
-        }
-
-        return response()->download(storage_path("app/public/{$document->path}"));
-    }*/
-
-    /**
-     * Supprimer un document
-     */
-    /*public function destroy(Document $document)
-    {
-        try {
-            if (Storage::disk('public')->exists($document->path)) {
-                Storage::disk('public')->delete($document->path);
-            }
-
-            $document->delete();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Document supprimé',
-            ]);
-        } catch (\Throwable $e) {
-            Log::error("Erreur suppression document: {$document->id}", [
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Impossible de supprimer le document',
-            ], 500);
-        }
-    }*/
 }

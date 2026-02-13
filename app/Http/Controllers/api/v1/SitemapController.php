@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\api\v1;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\ProcessSitemapJob;
+use App\Jobs\sitemap\ProcessSitemapJob;
 use App\Models\Document;
 use App\Models\Site;
 use Illuminate\Http\Request;

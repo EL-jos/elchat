@@ -2,9 +2,8 @@
 
 namespace App\Jobs;
 
-use App\Models\KnowledgeQualityScore;
 use App\Models\Site;
-use App\Services\KnowledgeQualityService;
+use App\Services\ia\KnowledgeQualityService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;

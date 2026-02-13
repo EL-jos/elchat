@@ -1,17 +1,15 @@
 <?php
 namespace App\Services;
 
+use App\Models\Chunk;
 use App\Models\Document;
 use App\Models\FieldSynonym;
 use App\Models\Page;
-use App\Models\Chunk;
-use App\Models\Site;
+use App\Services\ia\EmbeddingService;
+use App\Services\vector\VectorIndexService;
 use App\Traits\TextNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use PhpOffice\PhpWord\IOFactory;
-use Spatie\PdfToText\Pdf;
-use Throwable;
 
 class IndexService
 {

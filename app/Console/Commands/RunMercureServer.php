@@ -11,7 +11,7 @@ class RunMercureServer extends Command
      *
      * @var string
      */
-    protected $signature = 'mercure:run';
+    protected $signature = 'mercure:serve';
 
     /**
      * The console command description.

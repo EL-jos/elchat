@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\Site;
-use App\Services\ChatService;
+use App\Services\ia\ChatService;
 use App\Services\MercureService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -26,12 +26,16 @@ class ChatController extends Controller
         //dd(auth()->user()->ownedAccount);
         $site = Site::where('id', $data['site_id'])
             //->where('account_id', auth()->user()->ownedAccount->id)
+            /*->whereHas('users', function($q) {
+                $q->where('id', auth()->id());
+            })*/
             ->firstOrFail();
         //dd($site);
 
         // 🔑 Continuité OU nouvelle conversation
         if (!empty($data['conversation_id'])) {
             $conversation = Conversation::where('id', $data['conversation_id'])
+                ->where('site_id', $site->id) // ✅ sécurité supplémentaire
                 ->where('user_id', auth()->id())
                 ->firstOrFail();
         } else {

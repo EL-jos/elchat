@@ -4,14 +4,10 @@ namespace App\Http\Controllers\api\v1;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ComputeKnowledgeQualityJob;
-use App\Jobs\CrawlSiteJob;
-use App\Jobs\GenerateSitemapJob;
-use App\Models\AIRole;
+use App\Jobs\crawl\CrawlSiteJob;
+use App\Jobs\sitemap\GenerateSitemapJob;
 use App\Models\Chunk;
-use App\Models\Conversation;
-use App\Models\CrawlJob;
 use App\Models\Document;
-use App\Models\Message;
 use App\Models\Page;
 use App\Models\Site;
 use App\Models\WidgetSetting;
@@ -19,17 +15,9 @@ use App\Services\CrawlService;
 use App\Services\IndexService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\FacadesLog;
 use Illuminate\Support\Str;
-use Symfony\Component\BrowserKit\HttpBrowser;
-use Symfony\Component\DomCrawler\Crawler;
-use Symfony\Component\HttpClient\HttpClient;
-use Throwable;
 
 class SiteController extends Controller
 {
