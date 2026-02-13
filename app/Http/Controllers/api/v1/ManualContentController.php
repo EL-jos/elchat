@@ -28,7 +28,7 @@ class ManualContentController extends Controller
         ]);
 
         app(IndexService::class)->indexPage($page, [
-            'source' => 'manuel',
+            'source' => $page->source,
             'site_id' => $site->id,
         ]);
 

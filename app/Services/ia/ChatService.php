@@ -30,7 +30,10 @@ class ChatService
         protected ChunkHydrationService $chunkHydrationService,
         protected ChunkRankingService $chunkRankingService,
         protected ContextBuilder $contextBuilder,
-        protected ProductEntityResolver $productEntityResolver
+        protected ProductEntityResolver $productEntityResolver,
+        protected FollowUpDetector $followUpDetector,
+        protected ConversationRewriterService $rewriter,
+        protected EntityResolver $entityResolver,
     )
     {}
 
@@ -97,9 +100,30 @@ class ChatService
             })
             ->toArray();
 
-        $query = $this->normalizeText($question);
+        /*$query = $this->normalizeText($question);
 
-        $query = $this->enrichQuestionWithHistory($query, $conversation);
+        if ($this->followUpDetector->isFollowUp($question)) {
+            $query = $this->rewriter->rewrite($question, $conversation);
+        }
+
+        $query = $this->normalizeText($query);*/
+
+        // 1️⃣ Normalisation brute
+        $normalizedQuestion = $this->normalizeText($question);
+
+        // 2️⃣ Détection intelligente follow-up via LLM
+        $isFollowUp = $this->followUpDetector->isFollowUp(
+            question: $normalizedQuestion,
+            conversation: $conversation
+        );
+
+        // 3️⃣ Rewrite uniquement si nécessaire
+        $query = $isFollowUp
+            ? $this->rewriter->rewrite($normalizedQuestion, $conversation)
+            : $normalizedQuestion;
+
+        // 4️⃣ Normalisation finale
+        $query = $this->normalizeText($query);
 
         // 1️⃣ Embedding de la question
         $questionEmbedding = $this->embeddingService->getEmbedding($query);
@@ -131,7 +155,8 @@ class ChatService
         $topChunks = $this->chunkRankingService->rank($hydrated, 5);
 
         // 🔥 Nouvelle étape intelligente
-        $topChunks = $this->productEntityResolver->resolve(collect($topChunks));
+        //$topChunks = $this->productEntityResolver->resolve(collect($topChunks));
+        $topChunks = $this->entityResolver->resolve(collect($topChunks));
 
         // 6️⃣ Construction du contexte
         $context = $this->contextBuilder->build($topChunks);
