@@ -369,7 +369,7 @@ class IndexService
     {
         $hash = sha1($text);
 
-        return Chunk::where('document_id', $document->id)
+        return Chunk::where('site_id', $document->documentable->id)
             ->whereRaw('SHA1(text) = ?', [$hash])
             ->exists();
     }
@@ -435,22 +435,46 @@ class IndexService
     {
         $productIndex = $priority + 1;
 
-        // 🛑 GARDE-FOU : produit déjà indexé → skip
-        if ($this->productAlreadyIndexed($document, $productIndex)) {
-            Log::info('Produit déjà indexé — skip', [
-                'document_id'   => $document->id,
-                'product_index' => $productIndex,
-            ]);
-            return;
-        }
+        $identifier = $product['identifier'] ?? $product['product_name'] ?? $product['product_reference'] ?? 'unknown-product';
 
-        $identifier = $product['product_name'] ?? $product['product_reference'] ?? 'unknown-product';
 
         Log::info('Indexation produit démarrée', [
             'document_id'   => $document->id,
             'product_index' => $productIndex,
             'identifier'    => $identifier,
         ]);
+
+        // 🔹 Vérifie si le produit a déjà été indexé avec CE document
+        $alreadyIndexedWithDocument = Chunk::where('source_type', 'woocommerce')
+            ->where('document_id', $document->id)
+            ->where('metadata->identifier', $identifier)
+            ->exists();
+
+        if ($alreadyIndexedWithDocument) {
+            Log::info("Produit déjà indexé avec ce document, on passe", [
+                'document_id' => $document->id,
+                'identifier' => $identifier,
+            ]);
+            return; // NE RIEN FAIRE
+        }
+
+        // 🔹 Si c'est un nouveau document et que le produit existe déjà avec un autre document
+        $existingChunks = Chunk::where('source_type', 'woocommerce')
+            ->where('metadata->identifier', $identifier)
+            ->where('document_id', '<>', $document->id)
+            ->get();
+
+        if ($existingChunks->isNotEmpty()) {
+            $chunkIds = $existingChunks->pluck('id')->all();
+            $this->vectorIndexService->deleteChunksBatch($chunkIds);
+            Chunk::whereIn('id', $chunkIds)->delete();
+
+            Log::info('Ancien produit supprimé pour nouveau document', [
+                'document_id' => $document->id,
+                'identifier' => $identifier,
+                'chunks_deleted' => count($chunkIds),
+            ]);
+        }
 
         DB::beginTransaction();
 
@@ -595,16 +619,6 @@ class IndexService
             ]);
             throw $e;
         }
-    }
-    /**
-     * Détecte si le produit a déjà été indexé
-     */
-    protected function productAlreadyIndexed(Document $document, int $productIndex): bool
-    {
-        return Chunk::where('document_id', $document->id)
-            ->where('source_type', 'woocommerce')
-            ->where('metadata->product_index', $productIndex)
-            ->exists();
     }
     /**
      * Génère des alias et synonymes pour un champ produit

@@ -50,12 +50,16 @@ class VectorIndexService
     public function deleteChunk(string $chunkId): void
     {
         try {
-            Http::timeout(5)->post(
+            $response = Http::timeout(5)->post(
                 "{$this->endpoint}/collections/{$this->collection}/points/delete",
                 [
                     'points' => [$chunkId],
                 ]
             );
+
+            if (!$response->successful()) {
+                throw new \Exception('Qdrant upsert failed: '.$response->body());
+            }
 
             Log::info('Qdrant delete success', [
                 'chunk_id' => $chunkId,
