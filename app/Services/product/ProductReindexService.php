@@ -21,12 +21,17 @@ class ProductReindexService
     /**
      * Liste paginée des produits (chunks globaux uniquement)
      */
-    public function listProducts(string $siteId, int $page = 1, int $perPage = 20): LengthAwarePaginator
-    {
+    public function listProducts(
+        string $siteId,
+        int $page = 1,
+        int $perPage = 20,
+        ?string $search = null
+    ): LengthAwarePaginator {
         Log::info('[PRODUCT LIST] Début listing produits', [
             'site_id' => $siteId,
             'page' => $page,
-            'per_page' => $perPage
+            'per_page' => $perPage,
+            'search' => $search
         ]);
 
         $query = Chunk::select(
@@ -39,15 +44,25 @@ class ProductReindexService
             ->where('site_id', $siteId)
             ->where('source_type', 'woocommerce')
             ->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.type'))) = 'global'")
-            ->whereRaw("JSON_EXTRACT(metadata, '$.product_index') IS NOT NULL")
-            ->groupBy('document_id', DB::raw("metadata->>'$.product_index'"));
+            ->whereRaw("JSON_EXTRACT(metadata, '$.product_index') IS NOT NULL");
+
+        // 🔎 Recherche simplifiée sur identifier
+        if (!empty($search)) {
+            $search = strtolower(trim($search));
+            $query->whereRaw(
+                "LOWER(JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.identifier'))) LIKE ?",
+                ["%{$search}%"]
+            );
+        }
+
+        $query->groupBy('document_id', DB::raw("metadata->>'$.product_index'"));
 
         $paginator = $query->paginate($perPage, ['*'], 'page', $page);
 
         $paginator->getCollection()->transform(function ($chunk) {
             return [
                 'document_id'   => $chunk->document_id,
-                'product_index' => (int) $chunk->product_index, // CAST ici
+                'product_index' => (int) $chunk->product_index,
                 'identifier'    => $chunk->identifier,
                 'global_text'   => $chunk->text,
                 'fields'        => json_decode($chunk->raw, true) ?? [],

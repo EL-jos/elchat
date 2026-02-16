@@ -16,8 +16,9 @@ class ChunkController extends Controller
     {
         $page = (int)$request->get('page', 1);
         $perPage = (int)$request->get('per_page', 20);
+        $search = $request->get('search');
 
-        $paginator = $this->productReindexService->listProducts($siteId, $page, $perPage);
+        $paginator = $this->productReindexService->listProducts($siteId, $page, $perPage, $search);
 
         return response()->json($paginator);
     }
