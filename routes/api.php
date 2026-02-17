@@ -9,6 +9,7 @@ use App\Http\Controllers\api\v1\ConversationController;
 use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\api\v1\DocumentController;
 use App\Http\Controllers\api\v1\ManualContentController;
+use App\Http\Controllers\api\v1\PageController;
 use App\Http\Controllers\api\v1\SitemapController;
 use App\Http\Controllers\api\v1\TypeSiteController;
 use App\Http\Controllers\api\v1\WidgetSettingController;
@@ -63,6 +64,12 @@ Route::prefix('v1')->group(function () {
         Route::controller(ChunkController::class)->group(function () {
             Route::get('chunk/{site}/products', 'indexProducts');
             Route::post('chunk/product/{site}/{document_id}/{product_index}/reindex', 'reindexProduct');
+        });
+        Route::controller(PageController::class)->group(function () {
+            Route::post("/pages/{page}/recrawl", "recrawl");
+            Route::post("site/{site}/pages/import", "import");
+            Route::delete('/pages', [PageController::class, 'destroyMultiple']);
+            Route::delete('/pages/{page}', [PageController::class, 'destroy']);
         });
     });
     Route::controller(SiteController::class)->group(function () {

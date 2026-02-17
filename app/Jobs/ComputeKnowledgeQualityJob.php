@@ -19,7 +19,7 @@ class ComputeKnowledgeQualityJob implements ShouldQueue
 
     /**
      * Create a new job instance.
-     * @param int|null $siteId pour recalculer un site spécifique ou tous
+     * @param string|null $siteId pour recalculer un site spécifique ou tous
      */
     public function __construct(?string $siteId = null)
     {
@@ -31,15 +31,42 @@ class ComputeKnowledgeQualityJob implements ShouldQueue
      */
     public function handle(KnowledgeQualityService $service)
     {
+        // Récupère le(s) site(s)
         $sites = $this->siteId
             ? Site::where('id', $this->siteId)->get()
             : Site::all();
 
-        foreach ($sites as $site) {
-            $score = $service->calculateForSite($site);
-            Log::info("KQI recalculé pour le site {$site->id}", [
-                'global_score' => $score->global_score
+        if ($sites->isEmpty()) {
+            Log::warning('Aucun site trouvé pour le calcul KQI', [
+                'site_id' => $this->siteId,
             ]);
+            return;
+        }
+
+        foreach ($sites as $site) {
+            try {
+                $score = $service->calculateForSite($site);
+
+                if (!$score) {
+                    Log::error("Impossible de calculer le KQI pour le site {$site->id}");
+                    continue; // passe au site suivant
+                }
+
+                Log::info("KQI recalculé pour le site {$site->id}", [
+                    'coverage_score'   => $score->coverage_score,
+                    'integrity_score'  => $score->integrity_score,
+                    'retrieval_score'  => $score->retrieval_score,
+                    'redundancy_score' => $score->redundancy_score,
+                    'freshness_score'  => $score->freshness_score,
+                    'global_score'     => $score->global_score,
+                    'recommendations'  => $score->recommendations,
+                ]);
+            } catch (\Exception $e) {
+                Log::error("Erreur lors du calcul KQI pour le site {$site->id}", [
+                    'error' => $e->getMessage(),
+                    'stack' => $e->getTraceAsString(),
+                ]);
+            }
         }
     }
 }

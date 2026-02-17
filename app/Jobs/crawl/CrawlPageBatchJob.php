@@ -2,10 +2,13 @@
 
 namespace App\Jobs\crawl;
 
+use App\Models\Chunk;
 use App\Models\CrawlJob;
+use App\Models\Page;
 use App\Models\Site;
 use App\Services\CrawlService;
 use App\Services\IndexService;
+use App\Services\vector\VectorIndexService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
@@ -31,7 +34,7 @@ class CrawlPageBatchJob implements ShouldQueue
         $this->urls = $urls;
     }
 
-    public function handle(CrawlService $crawlService, IndexService $indexService)
+    public function handle(CrawlService $crawlService, IndexService $indexService, VectorIndexService $vectorIndexService)
     {
         $site = Site::findOrFail($this->siteId);
 
@@ -50,6 +53,25 @@ class CrawlPageBatchJob implements ShouldQueue
             $crawlJob->update(['status' => 'processing']);
 
             try {
+                // 🔥 RECRAWL SAFE — suppression ancienne page + chunks
+                $existingPage = Page::where('site_id', $site->id)
+                    ->where('url', $crawlJob->page_url)
+                    ->first();
+
+                if ($existingPage) {
+
+                    $chunkIds = Chunk::where('page_id', $existingPage->id)
+                        ->pluck('id')
+                        ->toArray();
+
+                    if (!empty($chunkIds)) {
+                        $vectorIndexService->deleteChunksBatch($chunkIds);
+                        Chunk::whereIn('id', $chunkIds)->delete();
+                    }
+
+                    $existingPage->delete();
+                }
+
                 $page = $crawlService->crawlSinglePage($site, $url, 0, $crawlJob->id);
 
                 if ($page) {

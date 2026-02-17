@@ -3,10 +3,13 @@
 namespace App\Jobs\sitemap;
 
 use App\Jobs\crawl\CheckCrawlCompletionJob;
+use App\Models\Chunk;
 use App\Models\CrawlJob;
+use App\Models\Page;
 use App\Models\Site;
 use App\Services\CrawlService;
 use App\Services\IndexService;
+use App\Services\vector\VectorIndexService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
@@ -23,7 +26,8 @@ class SitemapPageBatchJob implements ShouldQueue
 
     public function handle(
         CrawlService $crawlService,
-        IndexService $indexService
+        IndexService $indexService,
+        VectorIndexService $vectorIndexService
     ) {
         $site = Site::findOrFail($this->siteId);
 
@@ -44,6 +48,25 @@ class SitemapPageBatchJob implements ShouldQueue
             $crawlJob->update(['status' => 'processing']);
 
             try {
+
+                $existingPage = Page::where('site_id', $site->id)
+                    ->where('url', $crawlJob->page_url)
+                    ->first();
+
+                if ($existingPage) {
+
+                    $chunkIds = Chunk::where('page_id', $existingPage->id)
+                        ->pluck('id')
+                        ->toArray();
+
+                    if (!empty($chunkIds)) {
+                        $vectorIndexService->deleteChunksBatch($chunkIds);
+                        Chunk::whereIn('id', $chunkIds)->delete();
+                    }
+
+                    $existingPage->delete();
+                }
+
                 // 🔥 MÊME moteur que le crawl URL
                 $page = $crawlService->crawlSinglePage(
                     $site,
