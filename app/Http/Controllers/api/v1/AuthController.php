@@ -397,6 +397,9 @@ class AuthController extends Controller
         // Auto-login
         $token = JWTAuth::fromUser($user);
 
+        // Attach user to site if provided
+        $this->attachUserToSiteIfNeeded($user, $request->site_id);
+
         return response()->json([
             'message' => 'Compte vérifié avec succès.',
             'token' => $token,
@@ -445,6 +448,7 @@ class AuthController extends Controller
         $request->validate([
             'email' => 'required|email',
             'password' => 'required',
+            'site_id' => 'nullable|uuid|exists:sites,id'
         ]);
 
         /**
@@ -491,6 +495,7 @@ class AuthController extends Controller
             ['logged_in_at' => now()]
         );
 
+        $this->attachUserToSiteIfNeeded($user, $request->site_id);
 
         return response()->json([
             'token' => $token,
@@ -819,4 +824,39 @@ class AuthController extends Controller
         ]);
     }
 
+    protected function errorResponse(
+        string $message,
+        string $errorCode,
+        int $status = 400
+    ) {
+        return response()->json([
+            'message'    => $message,
+            'error_code' => $errorCode,
+        ], $status);
+    }
+
+    private function attachUserToSiteIfNeeded(User $user, ?string $siteId): void
+    {
+        if (! $siteId) {
+            return;
+        }
+
+        $now = now();
+
+        if (! $user->sites()->where('site_id', $siteId)->exists()) {
+
+            // Première visite
+            $user->sites()->attach($siteId, [
+                'first_seen_at' => $now,
+                'last_seen_at'  => $now,
+            ]);
+
+        } else {
+
+            // Déjà lié → on met à jour uniquement last_seen_at
+            $user->sites()->updateExistingPivot($siteId, [
+                'last_seen_at' => $now,
+            ]);
+        }
+    }
 }

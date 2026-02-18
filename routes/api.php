@@ -12,6 +12,7 @@ use App\Http\Controllers\api\v1\ManualContentController;
 use App\Http\Controllers\api\v1\PageController;
 use App\Http\Controllers\api\v1\SitemapController;
 use App\Http\Controllers\api\v1\TypeSiteController;
+use App\Http\Controllers\api\v1\UserController;
 use App\Http\Controllers\api\v1\WidgetSettingController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\api\v1\SiteController;
@@ -48,9 +49,12 @@ Route::prefix('v1')->group(function () {
             //Route::post('/api/products/{productIndex}/reindex', 'reindexProducts');
         });
         Route::post('/chat/ask', [ChatController::class, 'ask']);
-        Route::apiResource('conversation', ConversationController::class)->except(['store', 'update', 'destroy']);
+        Route::apiResource('conversation', ConversationController::class)->except(['store', 'update',]);
         Route::controller(ConversationController::class)->group(function () {
             Route::get('/conversation/{conversationId}/{siteId}', 'messages');
+            Route::get('/conversation/{conversationId}/{siteId}/admin', 'messagesAdmin');
+            Route::get('/conversation/{conversationId}/site/{siteId}/user/{userId}', 'messagesByUser');
+            Route::get('/site/{siteId}/users/{userId}/conversations', "conversationsByUser");
         });
         Route::post('/site/{site}/manual-content', [ManualContentController::class, 'store']);
         Route::post('/site/{site}/sitemap', [SitemapController::class, 'store']);
@@ -70,6 +74,10 @@ Route::prefix('v1')->group(function () {
             Route::post("site/{site}/pages/import", "import");
             Route::delete('/pages', [PageController::class, 'destroyMultiple']);
             Route::delete('/pages/{page}', [PageController::class, 'destroy']);
+        });
+        Route::controller(UserController::class)->group(function (){
+            Route::get('/users/site/{site}', 'index')->whereUuid('site');
+            Route::get('users/{userId}/site/{site}', 'show')->whereUuid(['userId', 'site']);
         });
     });
     Route::controller(SiteController::class)->group(function () {

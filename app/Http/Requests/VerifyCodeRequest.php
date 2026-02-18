@@ -24,6 +24,7 @@ class VerifyCodeRequest extends FormRequest
         return [
             'email' => 'required|email|exists:users,email',
             'code'  => 'required|string|size:6',
+            'site_id' => 'nullable|uuid|exists:sites,id'
         ];
     }
 }
