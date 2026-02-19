@@ -199,6 +199,7 @@
 
     const API_URL = `http://127.0.0.1:8000/api/v1/site/${SITE_ID}/widget/config`; // ton endpoint réel
     const IFRAME_URL = 'http://localhost:4201/elchat/widget?site_id=' + encodeURIComponent(SITE_ID);
+    let userClosed = false; // au top du script
 
     /* =========================
        CONFIG PAR DÉFAUT (SAFE)
@@ -206,13 +207,14 @@
     const DEFAULT_CONFIG = {
         button: {
             text: '💬 Chat',
-            background: '#6200ee',
+            background: '#ff9100',
             color: '#fff',
             position: 'bottom-right',
             offsetX: '1rem',
-            offsetY: '1rem'
+            offsetY: '1rem',
+            html: '<img src="http://localhost:4201/assets/svg/logo_white.svg" style="user-select: none; pointer-events: none" width="70" alt="Chat" />',
         },
-        auto_open_delay: 0 // pas d'auto-open par défaut
+        auto_open_delay: 5 // pas d'auto-open par défaut
     };
 
     let config = DEFAULT_CONFIG;
@@ -255,7 +257,10 @@
 
         btn = document.createElement('button');
         btn.id = 'elchat-btn';
-        btn.innerText = config.button.text;
+        //btn.innerText = config.button.text;
+        btn.innerHTML = config.button.html;
+        btn.innerHTML = '<img src="http://localhost:4201/assets/svg/logo_white.svg" style="user-select: none; pointer-events: none" width="70" alt="Chat" />';
+        btn.setAttribute('aria-label', config.button.text);
 
         Object.assign(btn.style, {
             position: 'fixed',
@@ -288,6 +293,7 @@
        3️⃣ Auto-open configurable
     ========================= */
     function setupAutoOpen() {
+        if (userClosed) return; // ✅ ignore auto-open si l'utilisateur a fermé
         const delay = Number(config.auto_open_delay) || 0;
         if (delay <= 0) return;
 
@@ -357,7 +363,8 @@
         }
 
         isOpened = false;
+        userClosed = true; // ✅ l'utilisateur a fermé
         createButton();
-        setupAutoOpen();
+        //setupAutoOpen();
     }
 })();
