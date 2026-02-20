@@ -322,6 +322,9 @@
         iframe = document.createElement('iframe');
         iframe.id = 'elchat-iframe';
         iframe.src = IFRAME_URL;
+        iframe.allow = "microphone";
+        iframe.allowTransparency = true;
+        iframe.sandbox = "allow-scripts allow-same-origin allow-popups allow-forms"
 
         Object.assign(iframe.style, {
             position: 'fixed',
