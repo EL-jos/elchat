@@ -34,6 +34,9 @@ class ChatService
         protected FollowUpDetector $followUpDetector,
         protected ConversationRewriterService $rewriter,
         protected EntityResolver $entityResolver,
+        protected IntentClassifier $intentClassifier,
+        protected ConversationStateManager $conversationStateManager,
+        protected ResponseGuard $responseGuard,
     )
     {}
 
@@ -78,10 +81,24 @@ class ChatService
     public function answer(Site $site, string $question, Conversation $conversation): string
     {
 
+        // ─────────────────────────────
+        // 0️⃣ Intent Classification
+        // ─────────────────────────────
+        $intent = $this->intentClassifier->classify($question);
+        $earlyResponse = $this->conversationStateManager
+            ->handle($intent, $conversation);
+
+        if ($earlyResponse !== null) {
+            return $earlyResponse;
+        }
+
+        // ─────────────────────────────
+        // 1️⃣ Récupération historique court
+        // ─────────────────────────────
         $history = Message::where('conversation_id', $conversation->id)
             ->orderBy('created_at', 'desc')
             ->skip(1)
-            ->take(6)
+            ->take(3)
             ->get()
             ->reverse()
             ->map(function ($m) {
@@ -102,23 +119,28 @@ class ChatService
 
         $query = $this->prepareQuestion($question, $conversation);
 
-        // 1️⃣ Embedding de la question
+        // ─────────────────────────────
+        // 2️⃣ Embedding
+        // ─────────────────────────────
         $questionEmbedding = $this->embeddingService->getEmbedding($query);
 
-        // 1b️⃣ Recherche vectorielle dans l'historique conversationnel
-        $conversationEmbedding = $questionEmbedding; // On peut réutiliser l'embedding de la question
+        // ─────────────────────────────
+        // 3️⃣ Recherche historique vectorielle
+        // ─────────────────────────────
         $historyMessagesResults = $this->vectorSearchService->searchMessages(
-            embedding: $conversationEmbedding,
+            embedding: $questionEmbedding,
             conversationId: $conversation->id,
-            limit: 10,
-            scoreThreshold: 0.2 // seuil plus bas pour récupérer un contexte large
+            limit: 3,
+            scoreThreshold: 0.45 // seuil plus bas pour récupérer un contexte large
         );
 
-        // 2️⃣ Recherche vectorielle Qdrant
+        // ─────────────────────────────
+        // 4️⃣ Recherche Qdrant
+        // ─────────────────────────────
         $qdrantResults = $this->vectorSearchService->search(
             embedding: $questionEmbedding,
             siteId: $site->id,
-            limit: 20,
+            limit: 10,
             scoreThreshold: floatval($site->settings->min_similarity_score)
         );
 
@@ -134,32 +156,39 @@ class ChatService
             N’hésitez pas à nous préciser votre besoin ou à nous contacter directement.";
         }
 
-        // 4️⃣ Hydratation MySQL
+        // ─────────────────────────────
+        // 5️⃣ Hydratation
+        // ─────────────────────────────
         $hydrated = $this->chunkHydrationService->hydrate($qdrantResults);
         $hydratedMessages = $this->chunkHydrationService->hydrateMessages($historyMessagesResults);
 
-        // 5️⃣ Ranking final métier
+        // ─────────────────────────────
+        // 6️⃣ Ranking métier
+        // ─────────────────────────────
         $ragContextChunks = $this->chunkRankingService->rank($hydrated, 5);
         $ragContextChunks = $this->entityResolver->resolve(collect($ragContextChunks));
+        $ragContextMessages = collect($hydratedMessages)->sortByDesc('vector_score')->take(5)->toArray();
+
         // Après avoir hydraté et résolu les entités
         $ragContextChunks = collect($ragContextChunks)
             ->map(fn($chunk) => [
                 ...$chunk,
                 'text' => $this->normalizeText($chunk['text']),
             ])->toArray();
-        $ragContextMessages = collect($hydratedMessages)->sortByDesc('vector_score')->take(5)->toArray();
         $ragContextMessages = collect($ragContextMessages)
             ->map(fn($msg) => [
                 ...$msg,
                 'text' => $this->normalizeText($msg['text']),
             ])->toArray();
 
-        // Fusion pour le RAG conversationnel
-        //$allContextChunks = array_merge($ragContextChunks, $ragContextMessages);
+        // ─────────────────────────────
+        // 7️⃣ Fusion + limite globale
+        // ─────────────────────────────
+
         $allContextChunks = collect(array_merge($ragContextChunks, $ragContextMessages))
             ->sortByDesc(fn($c) => $c['vector_score'] ?? 0)
             ->toArray();
-        $maxChunks = 10; // chunks + messages
+        $maxChunks = 8; // chunks + messages
         $allContextChunks = array_slice($allContextChunks, 0, $maxChunks);
 
         // Construire le contexte final pour le LLM
@@ -169,7 +198,9 @@ class ChatService
             return "Je n’ai pas d’information fiable à ce sujet pour le moment.";
         }
 
-        // 🔹 Construire le prompt complet (SYSTEM + MESSAGES)
+        // ─────────────────────────────
+        // 8️⃣ Construction Prompt
+        // ─────────────────────────────
         $promptPayload = $this->promptBuilder->build(
             site: $site,
             question: $query,
@@ -177,16 +208,19 @@ class ChatService
             history: $history
         );
 
-        // 🔹 Appel LLM
-                return $this->callLLM(
-                    site: $site,
-                    prompt: $promptPayload,
-                    question: $question
-                );
+        // ─────────────────────────────
+        // 9️⃣ Appel LLM
+        // ─────────────────────────────
+        $response =  $this->callLLM(
+            site: $site,
+            prompt: $promptPayload,
+            question: $question
+        );
 
-
-        // Appel à la nouvelle version de callLLM avec retry
-        //return $this->callLLM($site, $question, $context, $history);
+        // ─────────────────────────────
+        // 🔟 Response Guard (anti-boucle)
+        // ─────────────────────────────
+        return $this->responseGuard->validate($response, $conversation);
     }
     /**
      * Appel LLM avec PERSONA EMPLOYÉ INTERNE
@@ -219,7 +253,7 @@ class ChatService
                     'model' => 'meta-llama/llama-3.1-8b-instruct',
                     'messages' => $messages,
                     'temperature' => floatval($settings->ai_temperature),
-                    'max_tokens' => $settings->ai_max_tokens,
+                    'max_tokens' => 350//$settings->ai_max_tokens,
                 ]);
 
                 // Vérifier si la requête HTTP a échoué (statut 4xx, 5xx)
