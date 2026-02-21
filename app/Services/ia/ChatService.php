@@ -100,33 +100,19 @@ class ChatService
             })
             ->toArray();
 
-        /*$query = $this->normalizeText($question);
-
-        if ($this->followUpDetector->isFollowUp($question)) {
-            $query = $this->rewriter->rewrite($question, $conversation);
-        }
-
-        $query = $this->normalizeText($query);*/
-
-        // 1️⃣ Normalisation brute
-        $normalizedQuestion = $this->normalizeText($question);
-
-        // 2️⃣ Détection intelligente follow-up via LLM
-        $isFollowUp = $this->followUpDetector->isFollowUp(
-            question: $normalizedQuestion,
-            conversation: $conversation
-        );
-
-        // 3️⃣ Rewrite uniquement si nécessaire
-        $query = $isFollowUp
-            ? $this->rewriter->rewrite($normalizedQuestion, $conversation)
-            : $normalizedQuestion;
-
-        // 4️⃣ Normalisation finale
-        $query = $this->normalizeText($query);
+        $query = $this->prepareQuestion($question, $conversation);
 
         // 1️⃣ Embedding de la question
         $questionEmbedding = $this->embeddingService->getEmbedding($query);
+
+        // 1b️⃣ Recherche vectorielle dans l'historique conversationnel
+        $conversationEmbedding = $questionEmbedding; // On peut réutiliser l'embedding de la question
+        $historyMessagesResults = $this->vectorSearchService->searchMessages(
+            embedding: $conversationEmbedding,
+            conversationId: $conversation->id,
+            limit: 10,
+            scoreThreshold: 0.2 // seuil plus bas pour récupérer un contexte large
+        );
 
         // 2️⃣ Recherche vectorielle Qdrant
         $qdrantResults = $this->vectorSearchService->search(
@@ -150,16 +136,34 @@ class ChatService
 
         // 4️⃣ Hydratation MySQL
         $hydrated = $this->chunkHydrationService->hydrate($qdrantResults);
+        $hydratedMessages = $this->chunkHydrationService->hydrateMessages($historyMessagesResults);
 
         // 5️⃣ Ranking final métier
-        $topChunks = $this->chunkRankingService->rank($hydrated, 5);
+        $ragContextChunks = $this->chunkRankingService->rank($hydrated, 5);
+        $ragContextChunks = $this->entityResolver->resolve(collect($ragContextChunks));
+        // Après avoir hydraté et résolu les entités
+        $ragContextChunks = collect($ragContextChunks)
+            ->map(fn($chunk) => [
+                ...$chunk,
+                'text' => $this->normalizeText($chunk['text']),
+            ])->toArray();
+        $ragContextMessages = collect($hydratedMessages)->sortByDesc('vector_score')->take(5)->toArray();
+        $ragContextMessages = collect($ragContextMessages)
+            ->map(fn($msg) => [
+                ...$msg,
+                'text' => $this->normalizeText($msg['text']),
+            ])->toArray();
 
-        // 🔥 Nouvelle étape intelligente
-        //$topChunks = $this->productEntityResolver->resolve(collect($topChunks));
-        $topChunks = $this->entityResolver->resolve(collect($topChunks));
+        // Fusion pour le RAG conversationnel
+        //$allContextChunks = array_merge($ragContextChunks, $ragContextMessages);
+        $allContextChunks = collect(array_merge($ragContextChunks, $ragContextMessages))
+            ->sortByDesc(fn($c) => $c['vector_score'] ?? 0)
+            ->toArray();
+        $maxChunks = 10; // chunks + messages
+        $allContextChunks = array_slice($allContextChunks, 0, $maxChunks);
 
-        // 6️⃣ Construction du contexte
-        $context = $this->contextBuilder->build($topChunks);
+        // Construire le contexte final pour le LLM
+        $context = $this->contextBuilder->build($allContextChunks);
 
         if (trim($context) === '') {
             return "Je n’ai pas d’information fiable à ce sujet pour le moment.";
@@ -325,6 +329,16 @@ class ChatService
         }
 
         return $question;
+    }
+
+    private function prepareQuestion(string $question, Conversation $conversation): string
+    {
+        $question = $this->enrichQuestionWithHistory($question, $conversation);
+        $normalized = $this->normalizeText($question);
+        if ($this->followUpDetector->isFollowUp($normalized, $conversation)) {
+            $normalized = $this->rewriter->rewrite($normalized, $conversation);
+        }
+        return $this->normalizeText($normalized);
     }
 
 }

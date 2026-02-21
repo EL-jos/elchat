@@ -23,8 +23,12 @@ class VectorIndexService
     public function upsertChunk(
         string $chunkId,
         array $embedding,
-        array $payload
+        array $payload,
+        string $collection = 'chunks'
     ): void {
+
+        $this->collection = $collection;
+
         try {
             Http::timeout(5)->put(
                 "{$this->endpoint}/collections/{$this->collection}/points",
@@ -47,8 +51,10 @@ class VectorIndexService
         }
     }
 
-    public function deleteChunk(string $chunkId): void
+    public function deleteChunk(string $chunkId, string $collection = 'chunks'): void
     {
+        $this->collection = $collection;
+
         try {
             $response = Http::timeout(5)->post(
                 "{$this->endpoint}/collections/{$this->collection}/points/delete",
@@ -78,9 +84,11 @@ class VectorIndexService
     /**
      * Suppression multiple chunks en batch
      */
-    public function deleteChunksBatch(array $chunkIds): void
+    public function deleteChunksBatch(array $chunkIds, string $collection = 'chunks'): void
     {
         if (empty($chunkIds)) return;
+
+        $this->collection = $collection;
 
         try {
             Http::timeout(10)->post(
@@ -100,4 +108,11 @@ class VectorIndexService
         }
     }
 
+    public function upsertMessage(
+        string $messageId,
+        array $embedding,
+        array $payload
+    ): void {
+        $this->upsertChunk($messageId, $embedding, $payload, 'messages');
+    }
 }

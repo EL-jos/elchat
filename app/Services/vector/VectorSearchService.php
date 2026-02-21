@@ -33,8 +33,10 @@ class VectorSearchService
         array $embedding,
         string $siteId,
         int $limit = 12,
-        float $scoreThreshold = 0.25
+        float $scoreThreshold = 0.25,
+        string $collection = 'chunks'
     ): array {
+        $this->collection = $collection;
         try {
             $response = Http::timeout($this->timeout)->post(
                 "{$this->baseUrl}/collections/{$this->collection}/points/search",
@@ -46,7 +48,7 @@ class VectorSearchService
                     'filter' => [
                         'must' => [
                             [
-                                'key' => 'site_id',
+                                'key' => $collection === 'chunks' ? 'site_id' : 'conversation_id',
                                 'match' => [
                                     'value' => $siteId
                                 ]
@@ -68,7 +70,12 @@ class VectorSearchService
 
 
             //return $response->json('result') ?? [];
-            $result = array_filter($response->json('result') ?? [], fn($item) => $item['payload']['site_id'] === $siteId);
+            //$result = array_filter($response->json('result') ?? [], fn($item) => $item['payload']['site_id'] === $siteId);
+            $filterKey = $collection === 'chunks' ? 'site_id' : 'conversation_id';
+            $result = array_filter(
+                $response->json('result') ?? [],
+                fn($item) => isset($item['payload'][$filterKey]) && $item['payload'][$filterKey] === $siteId
+            );
             return $result;
 
         } catch (\Throwable $e) {
@@ -79,5 +86,20 @@ class VectorSearchService
 
             return [];
         }
+    }
+
+    public function searchMessages(
+        array $embedding,
+        string $conversationId,
+        int $limit = 10,
+        float $scoreThreshold = 0.25
+    ): array {
+        return $this->search(
+            $embedding,
+            $conversationId,        // ici on met conversation_id au lieu de site_id
+            $limit,
+            $scoreThreshold,
+            'messages'
+        );
     }
 }
